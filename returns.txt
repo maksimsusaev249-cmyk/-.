@@ -1,0 +1,22 @@
+151:    return (saved as "pc" | "mobile") || null;
+730:    return () => {
+753:      return () => clearTimeout(timer);
+767:    return () => clearInterval(interval);
+777:      return () => clearInterval(autoInterval);
+1203:    return () => unsubscribe();
+1275:    return () => clearInterval(interval);
+1404:    return () => clearInterval(intervalId);
+1536:      return () => unsubscribe();
+1967:    return (
+1996:    return (
+2037:    return (
+2078:                return (
+2106:                return (
+2219:    return (
+2614:    return (
+2680:                      return (
+2790:                      return (
+2914:                        return (
+2964:                      return (
+3012:    return (
+3325:  return (

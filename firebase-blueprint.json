@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Saved game state and profile of the player bound to their Google auth credentials.",
+      "type": "object",
+      "properties": {
+        "coins": { "type": "number", "description": "Total amount of coins" },
+        "clickPowerLevel": { "type": "number", "description": "Power level for each manual click" },
+        "autoClickerLevel": { "type": "number", "description": "Level of auto clickers" },
+        "energyLevel": { "type": "number", "description": "Upgrade level for max reserve energy" },
+        "energy": { "type": "number", "description": "Current energy pool capacity" },
+        "maxEnergy": { "type": "number", "description": "Max limit of energy" },
+        "regenRate": { "type": "number", "description": "Amount of energy restored per second" },
+        "totalClicks": { "type": "number", "description": "Cumulative click count" },
+        "playerName": { "type": "string", "description": "Google display name or chosen nickname" },
+        "playerClan": { "type": "string", "description": "Name of joined Clan" },
+        "currentQuest": { "type": "object", "description": "Assigned active quest parameters" },
+        "telegramId": { "type": "string", "description": "Linked Telegram User ID (optional)" },
+        "telegramUsername": { "type": "string", "description": "Linked Telegram Username (optional)" },
+        "telegramPhotoUrl": { "type": "string", "description": "Linked Telegram Photo Avatar URL (optional)" },
+        "photoURL": { "type": "string", "description": "Player chosen custom avatar photo URL or Base64 (optional)" },
+        "notificationsEnabled": { "type": "boolean", "description": "Whether Telegram Bot notifications are enabled (optional)" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last write/sync" }
+      },
+      "required": ["coins", "clickPowerLevel", "totalClicks", "playerName"]
+    },
+    "MarketplaceListing": {
+      "title": "MarketplaceListing",
+      "description": "P2P Marketplace item offered by a player in exchange for game coins.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the item" },
+        "description": { "type": "string", "description": "Detailed description of item utilities" },
+        "price": { "type": "number", "description": "Coin cost of the listing" },
+        "sellerId": { "type": "string", "description": "Firebase UID of selling player" },
+        "sellerName": { "type": "string", "description": "Display name of the seller" },
+        "status": { "type": "string", "enum": ["active", "sold"], "description": "Current state of the card" },
+        "buyerId": { "type": "string", "description": "Firebase UID of buying player (optional)" },
+        "itemImage": { "type": "string", "description": "The URL for the item image" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of initialization" }
+      },
+      "required": ["title", "description", "price", "sellerId", "sellerName", "status", "itemImage"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProgress",
+      "description": "Active game save directory indexed securely by Google Authentication UID"
+    },
+    "/marketplace/{listingId}": {
+      "schema": "MarketplaceListing",
+      "description": "Active listings directory of general P2P items traded by players"
+    }
+  }
+}

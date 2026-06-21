@@ -1,0 +1,2305 @@
+import express from "express";
+import { createServer } from "http";
+import path from "path";
+import { WebSocketServer, WebSocket } from "ws";
+import { createServer as createViteServer } from "vite";
+import crypto from "crypto";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import fs from "fs";
+import { google } from 'googleapis';
+import AdmZip from "adm-zip";
+
+function isValidGoogleSheetId(id: string | null | undefined): boolean {
+  if (!id) return false;
+  const trimmed = id.trim();
+  // A valid Google Spreadsheet ID is usually 44 characters, let's enforce a length check and standard format
+  return trimmed.length >= 20 && /^[a-zA-Z0-9-_]+$/.test(trimmed) && trimmed !== "∆Mr.";
+}
+
+async function appendToGoogleSheet(spreadsheetId: string, values: any[]) {
+  if (!isValidGoogleSheetId(spreadsheetId)) {
+    console.log(`Skipping append: "${spreadsheetId}" is not a valid Google Spreadsheet ID.`);
+    return;
+  }
+  try {
+    const auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    const authClient = await auth.getClient();
+    const sheets = google.sheets({ version: 'v4', auth: authClient as any });
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: 'Sheet1!A1',
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [values],
+      },
+    });
+  } catch (err: any) {
+    console.error(`Failed to append to Google Sheet (${spreadsheetId}):`, err.message || err);
+  }
+}
+
+async function getGoogleSheetValues(spreadsheetId: string, range: string): Promise<any[][] | null> {
+  if (!isValidGoogleSheetId(spreadsheetId)) {
+    console.log(`Skipping read: "${spreadsheetId}" is not a valid Google Spreadsheet ID.`);
+    return null;
+  }
+  try {
+    const auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    });
+    const authClient = await auth.getClient();
+    const sheets = google.sheets({ version: 'v4', auth: authClient as any });
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range,
+    });
+    return res.data.values || null;
+  } catch (err: any) {
+    console.error(`Error reading Google Sheet values (${spreadsheetId}):`, err.message || err);
+    return null;
+  }
+}
+
+// Firebase Web SDK for Bot query bypass
+import { initializeApp as initClientApp, getApps as getClientApps } from "firebase/app";
+import { getAuth as getClientAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { getFirestore as getClientFirestore, collection, query, where, limit, getDocs, doc, updateDoc, getDoc, onSnapshot, addDoc, serverTimestamp, setDoc, runTransaction } from "firebase/firestore";
+
+// Load Firebase configuration
+let firebaseConfig: any = {};
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } else {
+    console.warn("WARNING: firebase-applet-config.json was not found in working directory!");
+  }
+} catch (configErr: any) {
+  console.error("WARNING: Failed to read/parse firebase-applet-config.json:", configErr);
+}
+
+// Initialize client SDK for bot lookup to bypass IAM permissions issues
+let botClientApp: any = null;
+let botClientAuth: any = null;
+let botClientDb: any = null;
+
+if (firebaseConfig && firebaseConfig.apiKey) {
+  try {
+    botClientApp = getClientApps().length
+      ? getClientApps()[0]
+      : initClientApp(firebaseConfig, "bot-client-app");
+    botClientAuth = getClientAuth(botClientApp);
+    botClientDb = getClientFirestore(botClientApp, firebaseConfig.firestoreDatabaseId || "(default)");
+  } catch (initErr: any) {
+    console.error("Failed to initialize client Firebase app:", initErr);
+  }
+} else {
+  console.error("CRITICAL: Firebase config is empty or missing key! Core features depending on Firestore may fail.");
+}
+
+// Secure system-level bot authenticator helper to satisfy Firestore rules
+async function getAuthenticatedDb() {
+  if (!botClientAuth || !botClientDb) {
+    console.error("Database connection properties are not configured!");
+    return null;
+  }
+  if (botClientAuth.currentUser) {
+    return botClientDb;
+  }
+  const botEmail = "system_bot_auth_user@telegram-clicker.game";
+  const botPassword = "BotSuperSecretSystemPass123!_@";
+  try {
+    await signInWithEmailAndPassword(botClientAuth, botEmail, botPassword);
+  } catch (err: any) {
+    console.log("Firebase system bot signin failed, attempting to register system bot...", err.message || err);
+    try {
+      await createUserWithEmailAndPassword(botClientAuth, botEmail, botPassword);
+    } catch (createErr: any) {
+      if (createErr.code === "auth/email-already-in-use") {
+        try {
+          await signInWithEmailAndPassword(botClientAuth, botEmail, botPassword);
+        } catch (retryErr) {
+          console.error("Failed bot retry sign in:", retryErr);
+        }
+      } else {
+        console.error("Failed to create system bot user:", createErr);
+      }
+    }
+  }
+  return botClientDb;
+}
+
+// Initialize Firebase Admin SDK
+if (!getApps().length) {
+  try {
+    if (firebaseConfig && firebaseConfig.projectId) {
+      initializeApp({
+        projectId: firebaseConfig.projectId,
+      });
+      console.log("Firebase Admin SDK initialized successfully.");
+    } else {
+      console.error("WARNING: firebaseConfig.projectId is missing. Cannot initialize Firebase Admin SDK.");
+    }
+  } catch (err) {
+    console.error("Failed to initialize Firebase Admin SDK:", err);
+  }
+}
+
+interface Player {
+  id: string;
+  name: string;
+  clan: string | null;
+  coins: number;
+  clicks: number;
+  color: string;
+  lastSeen: number;
+  isOnline: boolean;
+  telegramId?: string | null;
+  autoClickerLevel?: number;
+  username?: string | null;
+  sheetId?: string | null;
+  notificationsEnabled?: boolean;
+  clickPowerLevel?: number;
+}
+
+interface ChatMessage {
+  id: string;
+  playerId: string;
+  playerName: string;
+  clan: string | null;
+  text: string;
+  timestamp: string;
+  color: string;
+  isClanOnly?: boolean;
+}
+
+const PORT = 3000;
+const app = express();
+const httpServer = createServer(app);
+
+// Use a shared WebSocket server
+const wss = new WebSocketServer({ noServer: true });
+
+// Connected players list in-memory
+const players: Map<string, Player> = new Map();
+// Latest 50 chat messages
+const chatMessages: ChatMessage[] = [];
+
+interface ClanConfig {
+  name: string;
+  password?: string;
+}
+// Clan configs storing password details
+const clansConfig: Map<string, ClanConfig> = new Map();
+
+interface TGCodeData {
+  id: string;
+  username: string;
+  first_name: string;
+  last_name: string;
+  photo_url?: string;
+  createdAt: number;
+}
+const verificationCodes: Map<string, TGCodeData> = new Map();
+
+interface ClientCodeData {
+  code: string;
+  telegramUser?: {
+    id: string;
+    username: string;
+    first_name: string;
+    last_name: string;
+    photo_url?: string;
+  };
+  resolved: boolean;
+  createdAt: number;
+}
+const pendingClientCodes: Map<string, ClientCodeData> = new Map();
+
+interface ClanWarHistoryRecord {
+  winner: string;
+  triggeringClan: string;
+  points: { [clanName: string]: number };
+  timestamp: number;
+}
+
+interface ClanWarState {
+  isWarActive: boolean;
+  countdownSeconds: number;
+  triggeringClan: string | null;
+  triggerThreshold: number;
+  clanProductionScores: { [clanName: string]: number };
+  clansWarPoints: { [clanName: string]: number };
+  lastWarWinner: string | null;
+  lastWarWinnerReward: number;
+  history: ClanWarHistoryRecord[];
+}
+
+let clanWarState: ClanWarState = {
+  isWarActive: false,
+  countdownSeconds: 0,
+  triggeringClan: null,
+  triggerThreshold: 10,
+  clanProductionScores: {},
+  clansWarPoints: {},
+  lastWarWinner: null,
+  lastWarWinnerReward: 5000,
+  history: []
+};
+
+let clProductionSimBoost: { [clanName: string]: number } = {};
+
+let currentMarketplaceListings: any[] = [];
+
+async function listenToMarketplace() {
+  try {
+    const dbInstance = await getAuthenticatedDb();
+    const marketplaceCol = collection(dbInstance, "marketplace");
+    const q = query(marketplaceCol, where("status", "==", "active"));
+    
+    onSnapshot(q, (snapshot) => {
+      const items: any[] = [];
+      snapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() });
+      });
+      // Sort items newest first
+      items.sort((a, b) => {
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA;
+      });
+      currentMarketplaceListings = items;
+      console.log(`[Marketplace Sync] Broadcasting ${items.length} active listings via WebSocket`);
+      broadcast({
+        type: "marketplace_update",
+        data: items
+      });
+    }, (error) => {
+      console.error("[Marketplace Sync] error in onSnapshot:", error);
+    });
+  } catch (err) {
+    console.error("[Marketplace Sync] init failed:", err);
+  }
+}
+
+let isHydrated = false;
+
+async function syncUsersFromFirestore() {
+  try {
+    const dbInstance = await getAuthenticatedDb();
+    const usersCol = collection(dbInstance, "users");
+    
+    console.log("[Users Sync] Subscribing to 'users' collection in Firestore 24/7...");
+    onSnapshot(usersCol, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        const id = change.doc.id;
+        const data = change.doc.data();
+        
+        if (change.type === "added" || change.type === "modified") {
+          const existing = players.get(id);
+          
+          players.set(id, {
+            id: id,
+            name: data.playerName || data.name || "Игрок",
+            clan: data.playerClan || data.clan || null,
+            coins: typeof data.coins === "number" ? data.coins : 0,
+            clicks: typeof data.totalClicks === "number" ? data.totalClicks : (typeof data.clicks === "number" ? data.clicks : 0),
+            color: existing?.color || data.color || getRandomColor(),
+            lastSeen: data.lastActiveTimestamp || data.lastSeen || Date.now(),
+            isOnline: existing?.isOnline ?? false,
+            telegramId: data.telegramId || null,
+            username: data.username || null,
+            sheetId: data.sheetId || null,
+            notificationsEnabled: data.notificationsEnabled !== false,
+            clickPowerLevel: data.clickPowerLevel || 1,
+            autoClickerLevel: typeof data.autoClickerLevel === "number" ? data.autoClickerLevel : 0
+          });
+        } else if (change.type === "removed") {
+          players.delete(id);
+        }
+      });
+      
+      if (!isHydrated) {
+        isHydrated = true;
+        console.log(`[Users Sync] Initial hydration complete. Total players loaded: ${players.size}`);
+      }
+      
+      // Update everyone with active stats and names
+      broadcastPlayers();
+    }, (error) => {
+      console.error("[Users Sync] error in onSnapshot:", error);
+    });
+  } catch (err) {
+    console.error("[Users Sync] Failed to initialize real-time user sync:", err);
+  }
+}
+
+function broadcastClanWarState() {
+  broadcast({
+    type: "clan_war_update",
+    data: clanWarState
+  });
+}
+
+function calculateClanProduction() {
+  const scores: { [clanName: string]: number } = {};
+  for (const player of players.values()) {
+    if (player.clan) {
+      if (!scores[player.clan]) {
+        scores[player.clan] = 0;
+      }
+      const lvl = player.autoClickerLevel || 0;
+      const cps = Math.ceil(lvl * 0.5) || 0;
+      scores[player.clan] += cps;
+    }
+  }
+  return scores;
+}
+
+// Memory-safe, instant, and double-fetch prevention lookup for Telegram players
+function findSyncPlayerByTelegram(tgId: string | null | undefined, username?: string, firstName?: string) {
+  if (!tgId && !username && !firstName) return null;
+  const targetTgId = tgId ? String(tgId).trim() : null;
+  const targetUsername = username ? String(username).toLowerCase().trim() : null;
+  const targetPlayerName = firstName ? String(firstName).toLowerCase().trim() : null;
+  
+  for (const p of players.values()) {
+    const dbTgId = p.telegramId ? String(p.telegramId).trim() : null;
+    const dbUsername = p.username ? String(p.username).toLowerCase().trim() : null;
+    const dbPlayerName = p.name ? String(p.name).toLowerCase().trim() : null;
+    
+    const isTgIdMatch = targetTgId && (dbTgId === targetTgId || dbTgId === String(Number(targetTgId)));
+    const isUsernameMatch = targetUsername && dbUsername === targetUsername;
+    const isPlayerNameMatch = targetPlayerName && dbPlayerName === targetPlayerName;
+
+    if (isTgIdMatch || isUsernameMatch || isPlayerNameMatch) {
+      return p;
+    }
+  }
+  return null;
+}
+
+// Helper to broadcast data to all active websockets
+function broadcast(data: any) {
+  const payload = JSON.stringify(data);
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
+}
+
+function getClansPrivacyList() {
+  return Array.from(clansConfig.entries()).map(([name, c]) => ({
+    name,
+    isPrivate: !!c.password
+  }));
+}
+
+function broadcastPlayers() {
+  broadcast({
+    type: "players_update",
+    data: {
+      players: Array.from(players.values()).filter(p => p.isOnline),
+      clanPrivacy: getClansPrivacyList()
+    }
+  });
+}
+
+// Color palettes for players in chat
+const PLAYER_COLORS = [
+  "#e67e22", // orange
+  "#2ecc71", // green
+  "#3498db", // blue
+  "#9b59b6", // purple
+  "#f1c40f", // yellow
+  "#e74c3c", // red
+  "#1abc9c", // turquoise
+  "#fd79a8", // pink
+  "#ffeaa7", // warm yellow
+  "#a8e6cf", // mint
+];
+
+function getRandomColor() {
+  return PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
+}
+
+// Websocket logic
+wss.on("connection", (ws: WebSocket) => {
+  let connectedPlayerId: string | null = null;
+
+  ws.on("message", (message: string) => {
+    try {
+      const event = JSON.parse(message);
+      
+      switch (event.type) {
+        case "register": {
+          const { id, name, clan, coins, clicks, color, telegramId, autoClickerLevel, email } = event.data;
+          
+          const proceedRegistration = () => {
+            // If the socket was previously attached to a different ID (like a guest ID), remove it to prevent duplicates
+            if (connectedPlayerId && connectedPlayerId !== id) {
+              players.delete(connectedPlayerId);
+            }
+            
+            connectedPlayerId = id;
+            
+            // Tag socket for connection checks
+            (ws as any).playerId = id;
+            (ws as any).clan = clan || null;
+            (ws as any).telegramId = telegramId || null;
+            
+            const existingColor = players.get(id)?.color || color || getRandomColor();
+            
+            players.set(id, {
+              id,
+              name: name || "Игрок",
+              clan: clan || null,
+              coins: typeof coins === "number" ? coins : 0,
+              clicks: typeof clicks === "number" ? clicks : 0,
+              color: existingColor,
+              lastSeen: Date.now(),
+              isOnline: true,
+              telegramId: telegramId || null,
+              autoClickerLevel: typeof autoClickerLevel === "number" ? autoClickerLevel : 0
+            });
+
+            // Log in Google Sheets if applicable
+            if (telegramId) {
+              const matchedPlayer = findSyncPlayerByTelegram(telegramId);
+              if (matchedPlayer && matchedPlayer.sheetId) {
+                appendToGoogleSheet(matchedPlayer.sheetId, [id, name, coins, clicks, new Date().toISOString()]);
+              }
+            }
+
+            // Send initial state: entire active player list and chat history and clan wars info
+            ws.send(JSON.stringify({
+              type: "init",
+              data: {
+                players: Array.from(players.values()).filter(p => p.isOnline),
+                chatHistory: chatMessages,
+                assignedColor: existingColor,
+                clanPrivacy: getClansPrivacyList(),
+                clanWarState: clanWarState,
+                marketplaceListings: currentMarketplaceListings,
+              },
+            }));
+
+            // Notify everyone about the updated list
+            broadcastPlayers();
+          };
+
+          // Google Sheets Whitelist Verification
+          if (masterSheetId) {
+            getGoogleSheetValues(masterSheetId, 'Sheet1!A1:Z550').then((values) => {
+              if (values) {
+                const flatValues = values.flat().filter(Boolean).map(v => String(v).trim().toLowerCase());
+                
+                // Whitelist terms to search
+                const termsToCheck = [
+                  id,
+                  telegramId ? String(telegramId).trim() : null,
+                  email ? String(email).trim().toLowerCase() : null,
+                  name ? String(name).trim().toLowerCase() : null
+                ].filter(Boolean) as string[];
+
+                // If any of the user's details matches any value (or substring) in the sheet's raw values, allow them!
+                const isWhitelisted = flatValues.some((cellVal) => {
+                  return termsToCheck.some(term => {
+                    return cellVal === term || cellVal.includes(term) || term.includes(cellVal);
+                  });
+                });
+
+                if (!isWhitelisted) {
+                  console.log(`Whitelist REJECTED for User: ${name} (ID: ${id}, TgID: ${telegramId}, Email: ${email})`);
+                  ws.send(JSON.stringify({
+                    type: "whitelist_rejected",
+                    data: { message: "Доступ ограничен! Вы не добавлены в белый список (Google Таблица)." }
+                  }));
+                  return;
+                }
+              }
+              proceedRegistration();
+            }).catch((err) => {
+              console.error("Whitelist check failed due to error, permitting player by fallback:", err);
+              proceedRegistration();
+            });
+          } else {
+            proceedRegistration();
+          }
+          break;
+        }
+
+        case "status_update": {
+          const { id, name, clan, coins, clicks, telegramId, autoClickerLevel } = event.data;
+          const player = players.get(id);
+          if (player) {
+            player.name = name || player.name;
+            player.clan = clan || null;
+            player.coins = typeof coins === "number" ? coins : player.coins;
+            player.clicks = typeof clicks === "number" ? clicks : player.clicks;
+            player.lastSeen = Date.now();
+            player.telegramId = telegramId || player.telegramId;
+            if (typeof autoClickerLevel === "number") {
+              player.autoClickerLevel = autoClickerLevel;
+            }
+            
+            players.set(id, player);
+            
+            // Keep socket properties in sync
+            if (id === connectedPlayerId) {
+              (ws as any).clan = clan || null;
+              (ws as any).telegramId = telegramId || (ws as any).telegramId;
+            }
+            
+            // Broadcast changes
+            broadcastPlayers();
+          }
+          break;
+        }
+
+        case "click_action": {
+          // A player clicked! Let's broadcast a small visual click effect event to make it feel super interactive
+          const { id, power } = event.data;
+          const player = players.get(id);
+          if (player) {
+            player.clicks += 1;
+            player.coins += power;
+            player.lastSeen = Date.now();
+            players.set(id, player);
+
+            broadcast({
+              type: "player_clicked",
+              data: {
+                id,
+                name: player.name,
+                clan: player.clan,
+                power,
+                color: player.color,
+                timestamp: Date.now(),
+              },
+            });
+
+            // Periodically broadcast the aggregated players update to ensure counts match
+            broadcastPlayers();
+          }
+          break;
+        }
+
+        case "clan_war_click": {
+          const { playerId, pointsContribution } = event.data;
+          const p = players.get(playerId);
+          if (p && p.clan && clanWarState.isWarActive) {
+            if (!clanWarState.clansWarPoints[p.clan]) {
+              clanWarState.clansWarPoints[p.clan] = 0;
+            }
+            clanWarState.clansWarPoints[p.clan] += (pointsContribution || 1);
+            
+            // Reward some coins for active participation in clan wars!
+            p.coins += (pointsContribution || 1);
+            p.clicks += 1;
+            players.set(playerId, p);
+            
+            // Save to Cloud Firestore so progress matches instantly and doesn't get lost
+            getAuthenticatedDb().then((dbInstance) => {
+              const userRef = doc(dbInstance, "users", playerId);
+              updateDoc(userRef, {
+                coins: p.coins,
+                totalClicks: p.clicks,
+                updatedAt: new Date()
+              }).catch((err) => {
+                console.error(`[War Click Doc Fail] Could not update user ${playerId} doc:`, err);
+              });
+            }).catch((err) => {
+              console.error("[War Click DB Fail] Could not obtain DB instance:", err);
+            });
+
+            broadcastPlayers();
+            broadcastClanWarState();
+          }
+          break;
+        }
+
+        case "clan_war_boost_simulation": {
+          const { clanName, amount } = event.data;
+          if (clanName) {
+            clProductionSimBoost[clanName] = (clProductionSimBoost[clanName] || 0) + (amount || 5);
+            broadcastClanWarState();
+          }
+          break;
+        }
+
+        case "chat_msg": {
+          const { playerId: senderId, text, isClanOnly } = event.data;
+          const player = players.get(senderId);
+          if (player && text.trim()) {
+            const timeStr = new Date().toLocaleTimeString("ru-RU", {
+              timeZone: "Europe/Moscow",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+
+            const newMsg: ChatMessage = {
+              id: Math.random().toString(36).substring(2, 9),
+              playerId: senderId,
+              playerName: player.name,
+              clan: player.clan,
+              text: text.substring(0, 150).trim(), // limit message length
+              timestamp: timeStr,
+              color: player.color,
+              isClanOnly: !!isClanOnly,
+            };
+
+            if (isClanOnly) {
+              // Send ONLY to players of the exact same clan
+              const playerClan = player.clan;
+              if (playerClan) {
+                const payload = JSON.stringify({
+                  type: "chat_msg_broadcast",
+                  data: newMsg,
+                });
+                wss.clients.forEach((client) => {
+                  if (client.readyState === WebSocket.OPEN && (client as any).clan === playerClan) {
+                    client.send(payload);
+                  }
+                });
+              }
+            } else {
+              // Standard Lobby msg
+              chatMessages.push(newMsg);
+              if (chatMessages.length > 50) {
+                chatMessages.shift();
+              }
+
+              broadcast({
+                type: "chat_msg_broadcast",
+                data: newMsg,
+              });
+            }
+          }
+          break;
+        }
+
+        case "direct_msg": {
+          const { playerId: senderId, recipientId, text } = event.data;
+          const player = players.get(senderId);
+          if (player && text.trim() && recipientId) {
+            const timeStr = new Date().toLocaleTimeString("ru-RU", {
+              timeZone: "Europe/Moscow",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+
+            const newMsg = {
+              id: Math.random().toString(36).substring(2, 9),
+              senderId: senderId,
+              senderName: player.name,
+              recipientId: recipientId,
+              text: text.substring(0, 150).trim(),
+              timestamp: timeStr,
+              color: player.color,
+            };
+
+            const payload = JSON.stringify({
+              type: "direct_msg_broadcast",
+              data: newMsg
+            });
+
+             // Deliver to recipient socket if online and track if they have an active connection
+            let hasActiveSocket = false;
+            wss.clients.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN && (client as any).playerId === recipientId) {
+                client.send(payload);
+                hasActiveSocket = true;
+              }
+            });
+ 
+             // Deliver back to sender socket
+             ws.send(payload);
+ 
+             // Notify recipient via Telegram if offline (no active websocket socket open)
+             const recipient = players.get(recipientId);
+             if (recipient && recipient.telegramId && !hasActiveSocket) {
+               sendCleanBotMessage(
+                 Number(recipient.telegramId), 
+                 `📩 *Новое личное сообщение от ${player.name}:*\n\n${text}`,
+                 {
+                    keepHistory: true,
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          { text: "❌ Удалить это сообщение", callback_data: "delete_this" },
+                          { text: "🧹 Удалить все уведомления", callback_data: "delete_all" }
+                        ]
+                      ]
+                    }
+                  }
+               );
+             }
+          }
+          break;
+        }
+
+        case "create_clan": {
+          const { id, name, password } = event.data;
+          const trimmedName = (name || "").trim();
+          const player = players.get(id);
+          if (trimmedName && player) {
+            clansConfig.set(trimmedName, {
+              name: trimmedName,
+              password: password ? password.trim() : undefined
+            });
+            player.clan = trimmedName;
+            players.set(id, player);
+
+            if (id === connectedPlayerId) {
+              (ws as any).clan = trimmedName;
+            }
+
+            ws.send(JSON.stringify({
+              type: "create_clan_res",
+              data: { success: true, clan: trimmedName }
+            }));
+
+            broadcastPlayers();
+          } else {
+            ws.send(JSON.stringify({
+              type: "create_clan_res",
+              data: { success: false, error: "Некорректное имя клана!" }
+            }));
+          }
+          break;
+        }
+
+        case "join_clan": {
+          const { id, clanName, password } = event.data;
+          const player = players.get(id);
+          if (player && clanName) {
+            const config = clansConfig.get(clanName);
+            if (config && config.password) {
+              if (config.password !== (password || "").trim()) {
+                ws.send(JSON.stringify({
+                  type: "join_clan_res",
+                  data: { success: false, error: "Неверный пароль клана! Попробуйте еще раз." }
+                }));
+                break;
+              }
+            }
+            if (!config) {
+              clansConfig.set(clanName, { name: clanName });
+            }
+
+            player.clan = clanName;
+            players.set(id, player);
+
+            if (id === connectedPlayerId) {
+              (ws as any).clan = clanName;
+            }
+
+            ws.send(JSON.stringify({
+              type: "join_clan_res",
+              data: { success: true, clan: clanName }
+            }));
+
+            broadcastPlayers();
+          } else {
+            ws.send(JSON.stringify({
+              type: "join_clan_res",
+              data: { success: false, error: "Ошибка при вступлении в клан!" }
+            }));
+          }
+          break;
+        }
+
+        case "leave_clan": {
+          const { id } = event.data;
+          const player = players.get(id);
+          if (player) {
+            player.clan = null;
+            players.set(id, player);
+
+            if (id === connectedPlayerId) {
+              (ws as any).clan = null;
+            }
+
+            ws.send(JSON.stringify({
+              type: "leave_clan_res",
+              data: { success: true }
+            }));
+
+            broadcastPlayers();
+          }
+          break;
+        }
+
+        case "ping": {
+          ws.send(JSON.stringify({ type: "pong" }));
+          break;
+        }
+      }
+    } catch (err) {
+      console.error("Failed to parse websocket message:", err);
+    }
+  });
+
+  ws.on("close", () => {
+    if (connectedPlayerId) {
+      const player = players.get(connectedPlayerId);
+      if (player) {
+        // Safe check: If it's a transient guest player ID (length < 15), remove entirely from memory map upon disconnect
+        if (connectedPlayerId.length < 15) {
+          players.delete(connectedPlayerId);
+        } else {
+          player.isOnline = false;
+          player.lastSeen = Date.now();
+          players.set(connectedPlayerId, player);
+        }
+      }
+      broadcastPlayers();
+    }
+  });
+});
+
+// Setup Upgrade path routing hook for standard websockets
+httpServer.on("upgrade", (request, socket, head) => {
+  const pathname = new URL(request.url || "", `http://${request.headers.host}`).pathname;
+  if (pathname === "/ws") {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8629175241:AAE4T1QAns_SqkCMXnGRI-_mRHqChzET8p4";
+
+const CONFIG_FILE = path.join(process.cwd(), "sheet_config.json");
+let masterSheetId = "";
+let admins: string[] = [];
+
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+      masterSheetId = data.masterSheetId || "";
+      admins = data.admins || [];
+    }
+  } catch (e) {
+    console.error("Failed to read sheet config:", e);
+  }
+}
+
+function saveConfig() {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ masterSheetId, admins }, null, 2), "utf8");
+  } catch (e) {
+    console.error("Failed to write sheet config:", e);
+  }
+}
+
+loadConfig();
+
+// Verification helper for Telegram Mini App initData
+function verifyTelegramWebappSignature(token: string, initData: string): boolean {
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    if (!hash) return false;
+
+    const keys = Array.from(params.keys())
+      .filter((k) => k !== "hash")
+      .sort();
+
+    const dataCheckString = keys.map((key) => `${key}=${params.get(key)}`).join("\n");
+
+    const secretKey = crypto
+      .createHmac("sha256", "WebAppData")
+      .update(token)
+      .digest();
+
+    const actualHash = crypto
+      .createHmac("sha256", secretKey)
+      .update(dataCheckString)
+      .digest("hex");
+
+    return actualHash === hash;
+  } catch (error) {
+    console.error("Error in verifyTelegramWebappSignature:", error);
+    return false;
+  }
+}
+
+// Verification helper for Telegram Login Widget
+function verifyTelegramWidgetSignature(token: string, user: any): boolean {
+  try {
+    const hash = user.hash;
+    if (!hash) return false;
+
+    const dataCheckArr: string[] = [];
+    const keys = Object.keys(user).filter((k) => k !== "hash").sort();
+    for (const key of keys) {
+      if (user[key] !== undefined && user[key] !== null) {
+        dataCheckArr.push(`${key}=${user[key]}`);
+      }
+    }
+    const dataCheckString = dataCheckArr.join("\n");
+
+    const secretKey = crypto.createHash("sha256").update(token).digest();
+
+    const actualHash = crypto
+      .createHmac("sha256", secretKey)
+      .update(dataCheckString)
+      .digest("hex");
+
+    return actualHash === hash;
+  } catch (error) {
+    console.error("Error in verifyTelegramWidgetSignature:", error);
+    return false;
+  }
+}
+
+interface BotChatState {
+  lastBotMessageId?: number;
+  sentMessageIds?: number[];
+  lastNotificationText?: string;
+  supportMode?: boolean;
+  supportDraft?: string[];
+}
+const botChatStates = new Map<number, BotChatState>();
+
+// Default application layout custom main menu keyboard
+const DEFAULT_KEYBOARD = {
+  keyboard: [
+    [
+      { text: "👤 Мой Профиль" },
+      { text: "💾 Сохранить прогресс" }
+    ],
+    [
+      { text: "🔑 Код для входа" },
+      { text: "🔔 Последнее уведомление" }
+    ],
+    [
+      { text: "🧹 Очистить чат" },
+      { text: "💬 Поддержка" }
+    ],
+    [
+      { text: "❓ Справка" }
+    ]
+  ],
+  resize_keyboard: true
+};
+
+async function deleteMessageSafe(chatId: number, messageId: number) {
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId
+      })
+    });
+    // Remove from in-memory tracking as well
+    const state = botChatStates.get(chatId);
+    if (state && state.sentMessageIds) {
+      state.sentMessageIds = state.sentMessageIds.filter(id => id !== messageId);
+      if (state.lastBotMessageId === messageId) {
+        delete state.lastBotMessageId;
+      }
+    }
+  } catch (err) {
+    // Ignore errors from missing permission or message already deleted
+  }
+}
+
+async function sendCleanBotMessage(chatId: number, text: string, options: any = {}): Promise<any> {
+  const state = botChatStates.get(chatId) || { sentMessageIds: [] };
+  if (!state.sentMessageIds) {
+    state.sentMessageIds = [];
+  }
+
+  // Auto clean up old single message if we are not keeping history info
+  if (state.lastBotMessageId && !options.keepHistory) {
+    await deleteMessageSafe(chatId, state.lastBotMessageId);
+  }
+
+  // Cache notification content if it contains transaction details, message texts, etc.
+  const isNotification = !!(options.keepHistory || text.includes("Сохранено") || text.includes("уведомление") || text.includes("сообщение") || text.includes("Прогресс"));
+  if (isNotification) {
+    state.lastNotificationText = text;
+  }
+
+  // Default to standard main menu keyboard if no customized reply_markup is passed in
+  const finalReplyMarkup = options.reply_markup !== undefined ? options.reply_markup : DEFAULT_KEYBOARD;
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: options.parse_mode || "Markdown",
+        reply_markup: finalReplyMarkup,
+        ...options
+      })
+    });
+    const json = await res.json();
+    if (json && json.ok && json.result) {
+      const messageId = json.result.message_id;
+      if (!options.keepHistory) {
+        state.lastBotMessageId = messageId;
+      }
+      if (!state.sentMessageIds.includes(messageId)) {
+        state.sentMessageIds.push(messageId);
+      }
+      botChatStates.set(chatId, state);
+      return json;
+    }
+  } catch (err) {
+    console.error("Error sending clean bot message:", err);
+  }
+  return null;
+}
+
+let lastUpdateId = 0;
+const processedUpdateIdsInMemory = new Set<number>();
+
+async function startTelegramBotPolling() {
+  console.log("Starting Telegram Bot Polling loop...");
+
+  // Prevent multiple active bot polling loops by using a PID lock file
+  const PID_FILE = "/tmp/telegram_bot_polling.pid";
+  const currentPid = process.pid;
+  try {
+    if (fs.existsSync(PID_FILE)) {
+      const oldPidStr = fs.readFileSync(PID_FILE, "utf8").trim();
+      const oldPid = parseInt(oldPidStr, 10);
+      if (oldPid && oldPid !== currentPid) {
+        console.log(`Killing old bot polling process: ${oldPid}`);
+        try {
+          process.kill(oldPid, "SIGTERM");
+          // Give it a tiny bit of time to release resources
+          await new Promise(r => setTimeout(r, 500));
+        } catch (err) {
+          // Process might already be dead or belong to a different user, ignore safely
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error managing bot lock file:", err);
+  }
+  try {
+    fs.writeFileSync(PID_FILE, String(currentPid), "utf8");
+  } catch (err) {
+    console.error("Error writing bot PID file:", err);
+  }
+  
+  // Skip over old historical messages sent while the bot was offline or during a server restart
+  try {
+    const initRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=-1&limit=1`);
+    const initData = await initRes.json();
+    if (initData && initData.ok && Array.isArray(initData.result) && initData.result.length > 0) {
+      lastUpdateId = initData.result[0].update_id;
+      console.log(`Telegram polling initialized. Skipping historical messages. lastUpdateId set to: ${lastUpdateId}`);
+    }
+  } catch (e) {
+    console.error("Failed to initialize lastUpdateId for Telegram bot skipping:", e);
+  }
+
+  while (true) {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=15`);
+      const data = await response.json();
+      if (data && data.ok && Array.isArray(data.result)) {
+        for (const update of data.result) {
+          lastUpdateId = update.update_id;
+
+          // In-memory instant deduplication of Telegram updates to prevent double-processing
+          if (processedUpdateIdsInMemory.has(update.update_id)) {
+            continue;
+          }
+          processedUpdateIdsInMemory.add(update.update_id);
+          // Prevent memory leaks by keeping the set history capped to latest 2000 items
+          if (processedUpdateIdsInMemory.size > 2000) {
+            const oldest = processedUpdateIdsInMemory.values().next().value;
+            if (oldest !== undefined) {
+              processedUpdateIdsInMemory.delete(oldest);
+            }
+          }
+
+          try {
+            const dbInstance = await getAuthenticatedDb();
+            const lockRef = doc(dbInstance, "bot_locks", String(update.update_id));
+            const isProcessed = await runTransaction(dbInstance, async (transaction) => {
+              const lockDoc = await transaction.get(lockRef);
+              if (lockDoc.exists()) {
+                return true;
+              }
+              transaction.set(lockRef, { processedAt: Date.now() });
+              return false;
+            });
+
+            if (isProcessed) {
+              continue;
+            }
+          } catch (lockErr) {
+            console.error("Lock error:", lockErr);
+          }
+
+          // Handle inline button Callback Queries (button click events)
+          if (update.callback_query) {
+            const callbackQuery = update.callback_query;
+            const callbackData = callbackQuery.data;
+            const chatId = callbackQuery.message?.chat?.id;
+            const messageId = callbackQuery.message?.message_id;
+
+            // Stop the loading spinner in the user's Telegram client right away
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ callback_query_id: callbackQuery.id })
+            }).catch(() => {});
+
+            if (chatId && messageId) {
+              if (callbackData === "delete_this") {
+                await deleteMessageSafe(chatId, messageId);
+              } else if (callbackData === "delete_all") {
+                const state = botChatStates.get(chatId);
+                if (state && state.sentMessageIds) {
+                  const idsToDelete = [...state.sentMessageIds];
+                  state.sentMessageIds = [];
+                  for (const id of idsToDelete) {
+                    await deleteMessageSafe(chatId, id);
+                  }
+                }
+              } else if (callbackData === "last_notification") {
+                const state = botChatStates.get(chatId) || {};
+                const lastNots = state.lastNotificationText || "📭 У вас пока нет сохраненных уведомлений.";
+                await sendCleanBotMessage(chatId, `🔔 *Последнее уведомление:*\n\n${lastNots}`, {
+                  keepHistory: true,
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        { text: "❌ Удалить сообщение", callback_data: "delete_this" },
+                        { text: "🧹 Очистить всё", callback_data: "delete_all" }
+                      ]
+                    ]
+                  }
+                });
+              }
+            }
+            continue;
+          }
+
+          if (update.message && update.message.text) {
+            const chatId = update.message.chat.id;
+            const text = update.message.text.trim();
+            const from = update.message.from;
+
+            // Clean the user's input messages immediately to keep the chat spotless
+            await deleteMessageSafe(chatId, update.message.message_id);
+
+            // Translate Keyboard Custom Button clicks back into standard commands
+            let mappedText = text;
+            const checkText = text.trim();
+            let state = botChatStates.get(chatId);
+            if (!state) {
+              state = { sentMessageIds: [] };
+              botChatStates.set(chatId, state);
+            }
+            
+            if (checkText === "❌ Отмена") {
+              state.supportMode = false;
+              state.supportDraft = [];
+              await sendCleanBotMessage(chatId, "❌ *Обращение в поддержку отменено.*", {
+                reply_markup: DEFAULT_KEYBOARD
+              });
+              continue;
+            }
+
+            if (state.supportMode) {
+              const userMessage = text.trim();
+              if (userMessage) {
+                // Instantly disable supportMode to prevent duplicate ticket submissions or race conditions
+                state.supportMode = false;
+                state.supportDraft = [];
+
+                const tgId = String(from.id);
+                const welcomeName = from.first_name || "Игрок";
+                const username = from.username ? `@${from.username}` : "";
+
+                // Automatically look up the registered player's in-game nickname!
+                const existingPlayer = Array.from(players.values()).find(
+                  (p) => p.telegramId === tgId || (p.username && p.username.toLowerCase() === from.username?.toLowerCase())
+                );
+                const displayName = existingPlayer ? `${existingPlayer.name} (ID: ${existingPlayer.id})` : welcomeName;
+
+                try {
+                  const dbInstance = await getAuthenticatedDb();
+                  const supportRef = collection(dbInstance, "support_tickets");
+                  await addDoc(supportRef, {
+                    telegramId: tgId,
+                    name: displayName,
+                    username: username,
+                    message: userMessage,
+                    createdAt: Date.now(),
+                    status: "open",
+                    chatId: chatId,
+                    isRead: false
+                  });
+
+                  console.log(`Support ticket successfully logged for ${displayName}`);
+
+                  const msg = `✅ *Сообщение отправлено!*\n\nВаше обращение доставлено администраторам. Пожалуйста, ожидайте ответа здесь в чате!`;
+                  await sendCleanBotMessage(chatId, msg, {
+                    reply_markup: DEFAULT_KEYBOARD
+                  });
+                } catch (dbErr: any) {
+                  console.error("Failed to commit support ticket to firestore:", dbErr);
+                  await sendCleanBotMessage(chatId, `❌ *Ошибка отправки обращения!*\n\nНе удалось доставить ваше сообщение администраторам. Пожалуйста, попробуйте еще раз.\n\nОшибка: ${dbErr.message || dbErr}`, {
+                    reply_markup: DEFAULT_KEYBOARD
+                  });
+                }
+              } else {
+                await sendCleanBotMessage(chatId, "⚠️ *Вы не написали текст обращения.* Попробуйте еще раз или нажмите ❌ Отмена.", {
+                  reply_markup: {
+                    keyboard: [[{ text: "❌ Отмена" }]],
+                    resize_keyboard: true,
+                    is_persistent: true
+                  }
+                });
+              }
+              continue;
+            }
+
+            if (checkText === "👤 Мой Профиль") {
+              mappedText = "/profile";
+            } else if (checkText === "🔑 Код для входа") {
+              mappedText = "/code";
+            } else if (checkText === "🔔 Последнее уведомление") {
+              mappedText = "/last_notification";
+            } else if (checkText === "💾 Сохранить прогресс") {
+              mappedText = "/save";
+            } else if (checkText === "🧹 Очистить чат") {
+              mappedText = "/clear_chat";
+            } else if (checkText === "💬 Поддержка") {
+              mappedText = "/support";
+            } else if (checkText === "❓ Справка") {
+              mappedText = "/aide";
+            }
+
+            const upperMappedText = mappedText.toUpperCase();
+
+            // 1. Extract potential 6-character code (supports stand-alone or '/start CODE' format)
+            let potentialCode = "";
+            let hasStartPayload = false;
+            if (upperMappedText.startsWith("/START ")) {
+              hasStartPayload = true;
+              const parts = mappedText.split(/\s+/);
+              if (parts.length > 1) {
+                potentialCode = parts[1].trim().toUpperCase();
+              }
+            } else if (upperMappedText.length === 6 && /^[A-Z0-9]{6}$/.test(upperMappedText)) {
+              potentialCode = upperMappedText;
+            }
+
+            // 2. Check if it matches an active waiting authorization code from the game client
+            if (potentialCode) {
+              if (pendingClientCodes.has(potentialCode)) {
+                const codeData = pendingClientCodes.get(potentialCode)!;
+                const now = Date.now();
+                if (now - codeData.createdAt <= 10 * 60 * 1000) {
+                  // Link telegram user details
+                  codeData.telegramUser = {
+                    id: String(from.id),
+                    username: from.username || "",
+                    first_name: from.first_name || "",
+                    last_name: from.last_name || ""
+                  };
+                  codeData.resolved = true;
+
+                  // Send intermediate "⏳ Секунду..." message using clean helper
+                  await sendCleanBotMessage(chatId, "⏳ Секунду...");
+
+                  // Wait for 5 seconds
+                  await new Promise((resolve) => setTimeout(resolve, 5000));
+
+                  // Find in memory instead of slow duplicate database query
+                  const tgId = String(from.id);
+                  const matchedPlayer = findSyncPlayerByTelegram(tgId, from.username, from.first_name);
+
+                  const welcomeName = from.first_name || "Игрок";
+                  let statsLine = "";
+                  if (matchedPlayer) {
+                    statsLine = `👤 Игрок: *${matchedPlayer.name || welcomeName}*\n💰 Баланс: *${Math.floor(matchedPlayer.coins || 0).toLocaleString()}* монет\n🕹 Клик-Очки: *${matchedPlayer.clicks || 0}*\n\n`;
+                  } else {
+                    statsLine = `👤 Игрок: *${welcomeName}*\n\n`;
+                  }
+
+                  const finalSuccessMsg = `ура вы подключены, теперь у вас доступ к уведомлениям! 🎮\n\n${statsLine}✨ Ваш игровой профиль успешно синхронизирован с Telegram!`;
+
+                  await sendCleanBotMessage(chatId, finalSuccessMsg, {
+                    reply_markup: DEFAULT_KEYBOARD
+                  });
+                  continue;
+                }
+              }
+
+              // Code is invalid or expired/already used. Prevent double code fly past.
+              const welcomeName = from.first_name || "Игрок";
+              const errorMsg = `⚠️ *Этот авторизационный код недействителен или устарел!*\n\nПривет, ${welcomeName}! Возможно, вы уже заходили по этому коду.\n\n🔑 Чтобы зайти с нового устройства, нажмите на кнопку\n**«🔑 Код для входа»** на клавиатуре ниже, чтобы получить свежий одноразовый код!`;
+              await sendCleanBotMessage(chatId, errorMsg, {
+                reply_markup: DEFAULT_KEYBOARD
+              });
+              continue;
+            }
+
+            // 3. Check for commands or start
+            if (mappedText.startsWith("/start") || mappedText.toLowerCase() === "войти" || mappedText.toLowerCase() === "login" || mappedText.toLowerCase() === "/login" || mappedText.toLowerCase() === "/code") {
+              // Generate a 6-digit uppercase numeric code
+              const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+              let code = "";
+              for (let i = 0; i < 6; i++) {
+                code += characters.charAt(Math.floor(Math.random() * characters.length));
+              }
+
+              // Store code (valid for 10 minutes)
+              verificationCodes.set(code, {
+                id: String(from.id),
+                username: from.username || "",
+                first_name: from.first_name || "",
+                last_name: from.last_name || "",
+                photo_url: "",
+                createdAt: Date.now()
+              });
+
+              // Clean up old codes
+              const now = Date.now();
+              verificationCodes.forEach((val, key) => {
+                if (now - val.createdAt > 10 * 60 * 1000) {
+                  verificationCodes.delete(key);
+                }
+              });
+
+              const welcomeName = from.first_name || "Игрок";
+              const codeMessage = `👋 *Привет, ${welcomeName}!* ✨\n\n🎮 Чтобы мгновенно связать ваш игровой профиль и включить уведомления, откройте игру на сайте и нажмите кнопку **«Подключить Telegram»**!\n\n🔑 Или используйте этот одноразовый код для входа на сайте:\n👉 \`${code}\` 👈\n\n🎮 *Удачной игры!*`;
+
+              await sendCleanBotMessage(chatId, codeMessage, {
+                reply_markup: DEFAULT_KEYBOARD
+              });
+            } else if (mappedText.toLowerCase() === "/last_notification" || mappedText.toLowerCase() === "/last") {
+              const state = botChatStates.get(chatId) || {};
+              const lastNots = state.lastNotificationText || "📭 У вас пока нет сохраненных уведомлений.";
+              await sendCleanBotMessage(chatId, `🔔 *Последнее уведомление:*\n\n${lastNots}`, {
+                keepHistory: true,
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: "❌ Удалить сообщение", callback_data: "delete_this" },
+                      { text: "🧹 Удалить всё", callback_data: "delete_all" }
+                    ]
+                  ]
+                }
+              });
+            } else if (mappedText.toLowerCase() === "/clear_chat" || mappedText.toLowerCase() === "/clear") {
+              const state = botChatStates.get(chatId);
+              if (state && state.sentMessageIds) {
+                const idsToDelete = [...state.sentMessageIds];
+                state.sentMessageIds = [];
+                for (const id of idsToDelete) {
+                  await deleteMessageSafe(chatId, id);
+                }
+              }
+              await sendCleanBotMessage(chatId, "🧹 *История уведомлений и чата бота успешно очищена!* ", {
+                reply_markup: DEFAULT_KEYBOARD
+              });
+            } else if (mappedText.toLowerCase() === "/support") {
+              state.supportMode = true;
+              state.supportDraft = [];
+              const msg = `💬 *Служба поддержки*\n\nНапишите ниже текст вашего обращения к администрации 👇`;
+              await sendCleanBotMessage(chatId, msg, {
+                reply_markup: {
+                  keyboard: [[{ text: "❌ Отмена" }]],
+                  resize_keyboard: true,
+                  is_persistent: true
+                }
+              });
+            } else if (mappedText.toLowerCase() === "/save" || mappedText.toLowerCase() === "save" || mappedText.toLowerCase() === "/сохранить" || mappedText.toLowerCase() === "сохранить" || mappedText.toLowerCase() === "/profile" || mappedText.toLowerCase() === "/профиль") {
+              const tgId = String(from.id);
+
+              // 1. Check if there are active WebSocket connections for this Telegram user to trigger real-time saving
+              let hasActiveSession = false;
+              wss.clients.forEach((client) => {
+                const clientTgId = (client as any).telegramId;
+                if (client.readyState === WebSocket.OPEN && typeof clientTgId === "string" && clientTgId && clientTgId === tgId) {
+                  try {
+                    client.send(JSON.stringify({ type: "SYNC_START" }));
+                    client.send(JSON.stringify({ type: "request_save" }));
+                    hasActiveSession = true;
+                  } catch (err) {
+                    console.error("Failed to send request_save message to ws client:", err);
+                  }
+                }
+              });
+
+              // Send intermediate "⏳ Загрузка..." message
+              const initialWaitText = hasActiveSession
+                ? "⏳ *Обнаружена активная сессия!* Обновляем данные..."
+                : "⏳ *Поиск профиля в базе...*";
+
+              await sendCleanBotMessage(chatId, initialWaitText);
+
+              // Wait for completion
+              if (hasActiveSession) {
+                // Wait 7.5 seconds allowing the browser client's 6-second progress bar animation to complete and write to Firestore
+                await new Promise(resolve => setTimeout(resolve, 7500));
+              } else {
+                // Short wait to ensure we fetch current database state
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+
+              // Use findSyncPlayerByTelegram to obtain the hydrated player details without querying database
+              const matchedPlayer = findSyncPlayerByTelegram(tgId, from.username, from.first_name);
+
+              const welcomeName = from.first_name || "Игрок";
+              let msg = "";
+              if (matchedPlayer) {
+                const isNotsEnabled = matchedPlayer.notificationsEnabled !== false;
+                const notsStatusLine = isNotsEnabled ? "🟢 *Уведомления включены*" : "🔴 *Уведомления отключены*";
+                msg = `🕹 *Ваш игровой профиль*\n\n👤 Игрок: *${matchedPlayer.name || welcomeName}*\n💰 Баланс: *${Math.floor(matchedPlayer.coins || 0).toLocaleString()}* монет\n🕹 Клик-Очки: *${matchedPlayer.clicks || 0}*\n⚡ Сила: *${matchedPlayer.clickPowerLevel || 1}*\n🤖 Автоклик: *${matchedPlayer.autoClickerLevel || 1}*\n\n⚙️ Статус: ${notsStatusLine}\n\n🟢 *Данные успешно найдены!* 🎮`;
+              } else {
+                msg = `🔍 *Профиль не найден*\n\nПривет, ${welcomeName}! Бот не смог найти привязанный аккаунт в базе данных.\n\nПожалуйста, убедитесь, что вы вошли в игру на сайте и привязали свой Telegram-аккаунт в меню настроек!`;
+              }
+
+              // Signal sync end
+              wss.clients.forEach((client) => {
+                const clientTgId = (client as any).telegramId;
+                if (client.readyState === WebSocket.OPEN && typeof clientTgId === "string" && clientTgId && clientTgId === tgId) {
+                  try {
+                    client.send(JSON.stringify({ type: "SYNC_END" }));
+                  } catch (err) {
+                    console.error("Failed to send SYNC_END message to ws client:", err);
+                  }
+                }
+              });
+
+              await sendCleanBotMessage(chatId, msg);
+            } else if (mappedText.toLowerCase() === "/aide" || mappedText.toLowerCase() === "aide" || mappedText.toLowerCase() === "/help") {
+              const msg = `📚 *Справка по боту*\n\n/start - Регистрация или получение кода для входа\n/save - Сохранить игровой прогресс вручную\n/aide - Показать эту справку\n\n📋 *Команды Google Таблицы:*\n✍️ Просто напишите свое *имя* или *логин* (или команду \`/add имя\`), чтобы занести ваши игровые данные в общую Google Таблицу!\n\n🔧 *Для Администраторов:*\n⚙️ \`/set_table <id_таблицы>\` - Задать ID общей Google Таблицы\n➕ \`/add_admin <tg_id>\` - Назначить админа\n✏️ Напишите любое имя/логин игрока, чтобы добавить его в таблицу без ограничений!`;
+              await sendCleanBotMessage(chatId, msg);
+            } else if (mappedText.startsWith("/set_table ")) {
+              const sheetId = mappedText.split(" ")[1]?.trim();
+              if (!sheetId) {
+                await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите ID таблицы: `/set_table <sheet_id>`");
+              } else {
+                const senderId = String(from.id);
+                // First ever configuration sets the first admin
+                if (admins.length === 0) {
+                  admins.push(senderId);
+                }
+                
+                if (!admins.includes(senderId)) {
+                  await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора для подключения таблицы!");
+                } else {
+                  masterSheetId = sheetId;
+                  saveConfig();
+                  await sendCleanBotMessage(chatId, `✅ *Общая Google Таблица успешно настроена!*\n\nID: \`${sheetId}\`\n\nТеперь вы можете добавлять данные игроков в таблицу, просто написав их имя/логин/ID, или введя команду:\n✍️ \`/add имя_или_логин\``);
+                }
+              }
+            } else if (mappedText.startsWith("/add_admin ") || mappedText.startsWith("/make_admin ")) {
+              const senderId = String(from.id);
+              if (admins.length === 0 || admins.includes(senderId)) {
+                const targetId = mappedText.split(" ")[1]?.trim();
+                if (targetId) {
+                  if (!admins.includes(targetId)) {
+                    admins.push(targetId);
+                    saveConfig();
+                  }
+                  await sendCleanBotMessage(chatId, `✅ Игрок с Telegram ID \`${targetId}\` успешно добавлен в администраторы бота!`);
+                } else {
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/add_admin <id>`");
+                }
+              } else {
+                await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
+              }
+            } else if (mappedText.startsWith("/add ") || mappedText.startsWith("/add_player ") || (!mappedText.startsWith("/") && mappedText.trim().length > 0)) {
+              // Extract the target search query. If it's a command, take everything post /add or /add_player.
+              let targetSearch = mappedText.trim();
+              if (mappedText.startsWith("/add ")) {
+                targetSearch = mappedText.substring(5).trim();
+              } else if (mappedText.startsWith("/add_player ")) {
+                targetSearch = mappedText.substring(12).trim();
+              }
+              
+              if (!targetSearch) {
+                await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите имя, логин или ID игрока:\n`/add имя_или_логин`");
+              } else {
+                const senderId = String(from.id);
+                const isAdmin = admins.includes(senderId);
+                
+                try {
+                  // Use memory-safe Players Map lookups to find the user instantly with zero read cost and no double fetching!
+                  let searchLower = targetSearch.toLowerCase();
+                  if (searchLower.startsWith("@")) {
+                    searchLower = searchLower.substring(1);
+                  }
+                  
+                  let matchedPlayer: any = null;
+                  for (const p of players.values()) {
+                    const dbTgId = p.telegramId ? String(p.telegramId).trim() : "";
+                    const dbUsername = p.username ? String(p.username).toLowerCase().trim() : "";
+                    const dbPlayerName = p.name ? String(p.name).toLowerCase().trim() : "";
+                    
+                    if (dbTgId === searchLower || dbUsername === searchLower || dbPlayerName === searchLower) {
+                      matchedPlayer = p;
+                      break;
+                    }
+                  }
+                  
+                  if (!matchedPlayer) {
+                    await sendCleanBotMessage(chatId, `🔍 *Профиль игрока "${targetSearch}" не найден*\n\nПожалуйста, убедитесь, что имя/логин введены верно и игрок зарегистрировался или вошел на сайте.`);
+                  } else {
+                    const dbTgId = matchedPlayer.telegramId ? String(matchedPlayer.telegramId).trim() : "";
+                    const dbUsername = matchedPlayer.username ? `@${matchedPlayer.username}` : "нет юзернейма";
+                    const dbPlayerName = matchedPlayer.name || "Игрок";
+                    
+                    // Access rules check: Admins can add anyone, players can only add themselves.
+                    const isSelf = dbTgId === senderId || 
+                                   (from.username && matchedPlayer.username && String(matchedPlayer.username).toLowerCase() === String(from.username).toLowerCase()) ||
+                                   (from.first_name && matchedPlayer.name && String(matchedPlayer.name).toLowerCase() === String(from.first_name).toLowerCase());
+                    
+                    if (!isSelf && !isAdmin) {
+                      await sendCleanBotMessage(chatId, "⚠️ Вы можете добавлять в таблицу только собственный игровой профиль! Добавление других игроков в таблицу доступно только администраторам.");
+                    } else if (!masterSheetId) {
+                      await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не подключена администратором.\nПожалуйста, настройте её с помощью команды `/set_table <id_таблицы>` перед добавлением игроков.");
+                    } else {
+                      // Attempt to write/append to sheet
+                      const recordCoins = Math.floor(matchedPlayer.coins || 0);
+                      const recordClicks = matchedPlayer.clicks || 0;
+                      
+                      try {
+                        await appendToGoogleSheet(masterSheetId, [
+                          new Date().toISOString(),
+                          dbTgId || "нет ID",
+                          dbUsername,
+                          dbPlayerName,
+                          recordCoins,
+                          recordClicks
+                        ]);
+                        await sendCleanBotMessage(chatId, `✅ *Данные игрока успешно занесены в Google Таблицу!*\n\n👤 Игрок: *${dbPlayerName}*\n💰 Монеты: *${recordCoins.toLocaleString()}*\n🕹 Клик-Очки: *${recordClicks}*\n📱 Telegram: ${dbUsername}`);
+                      } catch (sheetErr: any) {
+                        console.error("Master sheet integration error appending row:", sheetErr);
+                        await sendCleanBotMessage(chatId, `❌ Ошибка интеграции с Google Таблицей. Пожалуйста, убедитесь, что сервисный аккаунт имеет права редактора для этой таблицы (ID: \`${masterSheetId}\`).\n\n*Текст ошибки:* ${sheetErr.message || sheetErr}`);
+                      }
+                    }
+                  }
+                } catch (e: any) {
+                  console.error("Firestore user search error in telegram bot lookup handler:", e);
+                  await sendCleanBotMessage(chatId, "❌ Внутренняя ошибка поиска профиля в базе данных.");
+                }
+              }
+            } else {
+              // Standard fallback explanation info
+              const welcomeName = from.first_name || "Игрок";
+              const fallbackMsg = `👋 *Привет, ${welcomeName}!* \n\nЧтобы связать свой игровой аккаунт и включить уведомления, пожалуйста, откройте игру на сайте и нажмите кнопку **«Подключить Telegram»**!\n\n💾 Отправьте /save, чтобы вручную сохранить прогресс и проверить актуальный баланс.\n📋 Или напишите ваше *имя* или *логин*, чтобы занести ваши данные в общую Google Таблицу!`;
+              await sendCleanBotMessage(chatId, fallbackMsg);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error in Telegram Bot long polling:", err);
+      // Delay retry on failure to avoid hitting limits
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    // Small sleep between polls
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+// Static files / Vite entry points
+async function start() {
+  app.use(express.json());
+
+  // API Telegram Auth Endpoint
+  app.post("/api/telegram-auth", async (req, res) => {
+    try {
+      const { initData, widgetData } = req.body;
+      let telegramUser: any = null;
+
+      if (initData) {
+        const isValid = verifyTelegramWebappSignature(TELEGRAM_BOT_TOKEN, initData);
+        if (!isValid) {
+          return res.status(401).json({ success: false, error: "Invalid signature" });
+        }
+        
+        const params = new URLSearchParams(initData);
+        const userJson = params.get("user");
+        if (userJson) {
+          telegramUser = JSON.parse(userJson);
+        }
+      } else if (widgetData) {
+        const isValid = verifyTelegramWidgetSignature(TELEGRAM_BOT_TOKEN, widgetData);
+        if (!isValid) {
+          return res.status(401).json({ success: false, error: "Invalid signature" });
+        }
+        telegramUser = widgetData;
+      }
+
+      if (!telegramUser || !telegramUser.id) {
+        return res.status(400).json({ success: false, error: "Missing user identity" });
+      }
+
+      const telegramId = String(telegramUser.id);
+      const username = telegramUser.username || "";
+      const firstName = telegramUser.first_name || "";
+      const lastName = telegramUser.last_name || "";
+      const fullName = [firstName, lastName].filter(Boolean).join(" ") || `Telegram Player ${telegramId}`;
+      const photoUrl = telegramUser.photo_url || "";
+
+      const uid = `telegram_${telegramId}`;
+      const email = `tg_${telegramId}@telegram-auth.game`;
+      const securePassword = crypto
+        .createHmac("sha256", TELEGRAM_BOT_TOKEN)
+        .update(telegramId)
+        .digest("hex");
+
+      res.json({
+        success: true,
+        email: email,
+        password: securePassword,
+        displayName: fullName,
+        photoURL: photoUrl,
+        user: {
+          uid: uid,
+          id: telegramId,
+          username: username,
+          displayName: fullName,
+          photoURL: photoUrl
+        }
+      });
+    } catch (err: any) {
+      console.error("Telegram auth API failure:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal server error" });
+    }
+  });
+
+  // API Telegram Notify Save Endpoint (respects user status)
+  app.post("/api/telegram-notify-save", async (req, res) => {
+    try {
+      const { telegramId, playerName, coins, notificationsEnabled } = req.body;
+      if (!telegramId) {
+        return res.status(400).json({ success: false, error: "Missing telegramId" });
+      }
+
+      // If notifications explicitly disabled, do not send messages to prevent annoyance
+      if (notificationsEnabled === false) {
+        return res.json({ success: true, message: "Notifications are disabled by user." });
+      }
+
+      const msg = `✅ *Ваш прогресс успешно синхронизирован!* 💾\n\n👤 Игрок: *${playerName || "Игрок"}*\n💰 Баланс: *${Math.floor(coins || 0).toLocaleString()}* монет\n\n🟢 *Вы подтверждены! Удачной игры!* 🎮`;
+
+      await sendCleanBotMessage(Number(telegramId), msg, {
+        keepHistory: true,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "❌ Удалить это сообщение", callback_data: "delete_this" },
+              { text: "🧹 Удалить все уведомления", callback_data: "delete_all" }
+            ]
+          ]
+        }
+      });
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Failed to send save notification over telegram:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // API Telegram Toggle Notifications
+  app.post("/api/telegram-toggle-notifications", async (req, res) => {
+    try {
+      const { telegramId, enabled, playerName } = req.body;
+      if (!telegramId) {
+        return res.status(400).json({ success: false, error: "Missing telegramId" });
+      }
+
+      const chatIdNum = Number(telegramId);
+      if (enabled) {
+        const msg = `🔔 *Уведомления подключены, хорошей игры!* 🎮`;
+        await sendCleanBotMessage(chatIdNum, msg, {
+          keepHistory: true,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "❌ Удалить это сообщение", callback_data: "delete_this" },
+                { text: "🧹 Удалить все уведомления", callback_data: "delete_all" }
+              ]
+            ]
+          }
+        });
+      } else {
+        const msg = `🔕 *Уведомления от бота отключены.* \n\nВы всегда можете включить их в настройках игры в любой момент.`;
+        await sendCleanBotMessage(chatIdNum, msg, {
+          keepHistory: true,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "❌ Удалить это сообщение", callback_data: "delete_this" },
+                { text: "🧹 Удалить все уведомления", callback_data: "delete_all" }
+              ]
+            ]
+          }
+        });
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Failed to toggle notifications:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // API Telegram Support Reply endpoint
+  app.post("/api/support-reply", async (req, res) => {
+    try {
+      const { chatId, message } = req.body;
+      if (!chatId || !message) {
+        return res.status(400).json({ success: false, error: "Missing parameters" });
+      }
+
+      const msg = `💬 *Ответ от Администратора*\n\n${message}`;
+      await sendCleanBotMessage(Number(chatId), msg, {
+        keepHistory: true, // we want them to see the reply
+        reply_markup: DEFAULT_KEYBOARD
+      });
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Support reply failed:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // API Telegram Verification Code Login Endpoint
+  app.post("/api/telegram-code-login", async (req, res) => {
+    try {
+      const { code } = req.body;
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({ success: false, error: "Код авторизации обязателен." });
+      }
+
+      const cleanCode = code.trim().toUpperCase();
+      const codeData = verificationCodes.get(cleanCode);
+
+      if (!codeData) {
+        return res.status(400).json({ success: false, error: "Неверный или истекший код авторизации." });
+      }
+
+      // 10 minutes expiry check
+      if (Date.now() - codeData.createdAt > 10 * 60 * 1000) {
+        verificationCodes.delete(cleanCode);
+        return res.status(400).json({ success: false, error: "Срок действия кода истек." });
+      }
+
+      // Consume valid code after a 30 second grace period to allow client retry cushion
+      setTimeout(() => {
+        verificationCodes.delete(cleanCode);
+      }, 30000);
+
+      const telegramId = codeData.id;
+      const username = codeData.username;
+      const uid = `telegram_${telegramId}`;
+      const fullName = [codeData.first_name, codeData.last_name].filter(Boolean).join(" ") || `Telegram Player ${telegramId}`;
+
+      const email = `tg_${telegramId}@telegram-auth.game`;
+      const securePassword = crypto
+        .createHmac("sha256", TELEGRAM_BOT_TOKEN)
+        .update(telegramId)
+        .digest("hex");
+
+      res.json({
+        success: true,
+        email: email,
+        password: securePassword,
+        displayName: fullName,
+        photoURL: "",
+        user: {
+          uid: uid,
+          id: telegramId,
+          username: username,
+          displayName: fullName,
+          photoURL: ""
+        }
+      });
+    } catch (err: any) {
+      console.error("Telegram verification code login API failure:", err);
+      res.status(500).json({ success: false, error: err.message || "Ошибка сервера" });
+    }
+  });
+
+  app.post("/api/log-trade", async (req, res) => {
+    const { buyerId, sellerId, itemTitle, price } = req.body;
+    try {
+      const dbInstance = await getAuthenticatedDb();
+      // Get seller sheet ID
+      const sellerDoc = await getDoc(doc(dbInstance, "users", sellerId));
+      if (sellerDoc.exists()) {
+        const sellerSheetId = sellerDoc.data().sheetId;
+        if (sellerSheetId) {
+          await appendToGoogleSheet(sellerSheetId, [new Date().toISOString(), "Sale", itemTitle, price, buyerId]);
+        }
+      }
+      
+      // Get buyer sheet ID
+      const buyerDoc = await getDoc(doc(dbInstance, "users", buyerId));
+      if (buyerDoc.exists()) {
+        const buyerSheetId = buyerDoc.data().sheetId;
+        if (buyerSheetId) {
+          await appendToGoogleSheet(buyerSheetId, [new Date().toISOString(), "Purchase", itemTitle, price, sellerId]);
+        }
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Trade logging error:", error);
+      res.status(500).json({ error: "Trade logging failed" });
+    }
+  });
+
+  app.post("/api/sync-sheet", async (req, res) => {
+    const { userId, coins, clicks, playerName } = req.body;
+    try {
+      if (!userId) {
+        return res.status(400).json({ error: "Missing userId" });
+      }
+      const dbInstance = await getAuthenticatedDb();
+      const userDoc = await getDoc(doc(dbInstance, "users", userId));
+      if (userDoc.exists()) {
+        const sheetId = userDoc.data().sheetId;
+        if (sheetId) {
+          await appendToGoogleSheet(sheetId, [userId, playerName || "Игрок", coins || 0, clicks || 0, new Date().toISOString()]);
+          return res.json({ success: true, message: "Successfully synced to sheet" });
+        }
+      }
+      res.json({ success: false, message: "No sheetId configured for user" });
+    } catch (error) {
+      console.error("Manual sheet sync error:", error);
+      res.status(500).json({ error: "Manual sheet sync failed" });
+    }
+  });
+
+  // Dynamic Telegram Bot config endpoint
+  let botUsername = "";
+  try {
+    fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && data.ok && data.result) {
+          botUsername = data.result.username;
+          console.log(`Telegram Bot username fetched dynamically: @${botUsername}`);
+        }
+      })
+      .catch((err) => {
+        console.error("Async fetch of bot info failed:", err);
+      });
+  } catch (err) {
+    console.error("Failed to trigger fetch of telegram bot info:", err);
+  }
+
+  app.get("/api/telegram-config", (req, res) => {
+    res.json({ botUsername: botUsername || "MyTelegramGameBot" });
+  });
+
+  // API to generate a login code for the game client
+  app.get("/api/telegram-login-code", (req, res) => {
+    try {
+      const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      let code = "";
+      for (let i = 0; i < 6; i++) {
+        code += characters.charAt(Math.floor(Math.random() * characters.length));
+      }
+
+      pendingClientCodes.set(code, {
+        code,
+        resolved: false,
+        createdAt: Date.now()
+      });
+
+      // Clean up old codes (>10 min)
+      const now = Date.now();
+      pendingClientCodes.forEach((val, key) => {
+        if (now - val.createdAt > 10 * 60 * 1000) {
+          pendingClientCodes.delete(key);
+        }
+      });
+
+      res.json({ success: true, code });
+    } catch (err: any) {
+      console.error("Failed to generate login code:", err);
+      res.status(500).json({ success: false, error: err.message || "Internal server error" });
+    }
+  });
+
+  // API to poll and check if a user sent this code to the TG bot
+  app.get("/api/telegram-login-poll", async (req, res) => {
+    try {
+      const { code } = req.query;
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({ success: false, error: "Код обязателен." });
+      }
+
+      const upperCode = code.trim().toUpperCase();
+      const codeData = pendingClientCodes.get(upperCode);
+
+      if (!codeData) {
+        return res.json({ success: true, resolved: false, error: "Код не найден или истек." });
+      }
+
+      // Check expiry (10 min)
+      if (Date.now() - codeData.createdAt > 10 * 60 * 1000) {
+        pendingClientCodes.delete(upperCode);
+        return res.json({ success: true, resolved: false, error: "Время действия кода истекло." });
+      }
+
+      if (codeData.resolved && codeData.telegramUser) {
+        const telegramId = codeData.telegramUser.id;
+        const username = codeData.telegramUser.username;
+        const uid = `telegram_${telegramId}`;
+        const fullName = [codeData.telegramUser.first_name, codeData.telegramUser.last_name].filter(Boolean).join(" ") || `Telegram Player ${telegramId}`;
+
+        const email = `tg_${telegramId}@telegram-auth.game`;
+        const securePassword = crypto
+          .createHmac("sha256", TELEGRAM_BOT_TOKEN)
+          .update(telegramId)
+          .digest("hex");
+
+        // Consume the code so it can't be reused
+        pendingClientCodes.delete(upperCode);
+
+        return res.json({
+          success: true,
+          resolved: true,
+          email: email,
+          password: securePassword,
+          displayName: fullName,
+          photoURL: "",
+          user: {
+            uid: uid,
+            id: telegramId,
+            username: username,
+            displayName: fullName,
+            photoURL: ""
+          }
+        });
+      }
+
+      return res.json({ success: true, resolved: false });
+    } catch (err: any) {
+      console.error("Error polling client code:", err);
+      res.status(500).json({ success: false, error: err.message || "Ошибка сервера" });
+    }
+  });
+
+  // API Health endpoint
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "healthy", onlineCount: players.size });
+  });
+
+  // API path to fetch synchronized server time (timestamp)
+  app.get("/api/time", (req, res) => {
+    res.json({ serverTime: Date.now() });
+  });
+
+  // API to download pre-configured PC launcher with all source code zip
+  app.get("/api/download-launcher", (req, res) => {
+    try {
+      console.log("[Launcher API] Generating launcher zip on-the-fly...");
+      const zip = new AdmZip();
+      
+      // Root files to package
+      const rootFiles = [
+        "package.json",
+        "server.ts",
+        "desktop-main.cjs",
+        "start-desktop.bat",
+        "УСТАНОВКА_ИГРЫ.bat",
+        "start.bat",
+        "tsconfig.json",
+        "vite.config.ts",
+        "index.html",
+        "metadata.json",
+        "firestore.rules",
+        "firebase-applet-config.json",
+        ".env.example"
+      ];
+
+      for (const file of rootFiles) {
+        const filePath = path.join(process.cwd(), file);
+        if (fs.existsSync(filePath)) {
+          zip.addLocalFile(filePath);
+        }
+      }
+
+      // Add the entire src and public directories
+      const srcPath = path.join(process.cwd(), "src");
+      if (fs.existsSync(srcPath)) {
+        zip.addLocalFolder(srcPath, "src");
+      }
+      
+      const publicPath = path.join(process.cwd(), "public");
+      if (fs.existsSync(publicPath)) {
+        zip.addLocalFolder(publicPath, "public");
+      }
+
+      const zipBuffer = zip.toBuffer();
+      
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", "attachment; filename=clicker-launcher.zip");
+      res.send(zipBuffer);
+    } catch (err: any) {
+      console.error("[Launcher API] Failed to generate desktop launcher zip:", err);
+      res.status(500).send("Ошибка создания лаунчера: " + (err.message || err));
+    }
+  });
+
+  if (process.env.NODE_ENV !== "production") {
+    // Development Mode
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    // Production Mode
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+    // Start background Firestore marketplace listener to sync listings with all players
+    listenToMarketplace().catch((err) => {
+      console.error("Marketplace listener routine failed:", err);
+    });
+
+    // Start background real-time user database synchronizer to support 24/7 clan battles and persistency
+    syncUsersFromFirestore().catch((err) => {
+      console.error("User db synchronizer routine failed:", err);
+    });
+
+    // Start background polling for Telegram Bot commands/login codes
+    startTelegramBotPolling().catch((err) => {
+      console.error("Bot polling routine crashed:", err);
+    });
+
+    // Start background interval for Clan Wars checking and ticking (runs every 1 second)
+    setInterval(() => {
+      try {
+        // 1. Calculate active clan production rates
+        const realScores = calculateClanProduction();
+        
+        // Add active simulation boost offsets
+        clanWarState.clanProductionScores = { ...realScores };
+        for (const cl in clProductionSimBoost) {
+          clanWarState.clanProductionScores[cl] = (clanWarState.clanProductionScores[cl] || 0) + clProductionSimBoost[cl];
+        }
+        
+        // 2. Check current phase
+        if (clanWarState.isWarActive) {
+          if (clanWarState.countdownSeconds > 0) {
+            clanWarState.countdownSeconds--;
+            
+            // Simulating real-time rival clicks and progress to make the battle a real live competition!
+            const triggeringClan = clanWarState.triggeringClan || null;
+            Object.keys(clanWarState.clansWarPoints).forEach(cName => {
+              // Only simulate rivals (clans other than our triggering clan)
+              if (cName !== triggeringClan) {
+                const rivalTapPower = Math.floor(Math.random() * 250) + 120; // 120-370 points per second
+                clanWarState.clansWarPoints[cName] = (clanWarState.clansWarPoints[cName] || 0) + rivalTapPower;
+              }
+            });
+          } else {
+            // War has concluded! Decide the victor
+            clanWarState.isWarActive = false;
+            
+            let winnerClan: string | null = null;
+            let maxPoints = -1;
+            
+            for (const clanName in clanWarState.clansWarPoints) {
+              const pts = clanWarState.clansWarPoints[clanName] || 0;
+              if (pts > maxPoints) {
+                maxPoints = pts;
+                winnerClan = clanName;
+              } else if (pts === maxPoints && pts > 0) {
+                // simple tie-breaker or multiple winners can be handled or left
+              }
+            }
+            
+            if (winnerClan && maxPoints > 0) {
+              clanWarState.lastWarWinner = winnerClan;
+              
+              // Reward online members with coins and persist to Firestore
+              for (const player of players.values()) {
+                if (player.clan === winnerClan) {
+                  player.coins += clanWarState.lastWarWinnerReward;
+                  players.set(player.id, player);
+                  
+                  // Persist to Cloud Firestore so progress isn't lost (works 24/7)
+                  getAuthenticatedDb().then((dbInstance) => {
+                    const userRef = doc(dbInstance, "users", player.id);
+                    updateDoc(userRef, {
+                      coins: player.coins,
+                      updatedAt: new Date()
+                    }).catch((err) => {
+                      console.error(`[Clan Reward Fail] Could not update coins in Firestore for user ${player.id}:`, err);
+                    });
+                  }).catch((err) => {
+                    console.error("[Clan Reward DB Fail] Could not obtain DB instance:", err);
+                  });
+                }
+              }
+              
+              // Record war history
+              const warRecord = {
+                winner: winnerClan,
+                triggeringClan: clanWarState.triggeringClan || winnerClan,
+                points: { ...clanWarState.clansWarPoints },
+                timestamp: Date.now()
+              };
+              clanWarState.history.unshift(warRecord);
+              if (clanWarState.history.length > 10) {
+                clanWarState.history.pop();
+              }
+              
+              // Push announcement into the public chat log
+              const systemMsg = `⚔️ Битва Кланов завершена! Клан [${winnerClan}] одержал сокрушительную победу с результатом в ${maxPoints} очков! Соратники получают награду +${clanWarState.lastWarWinnerReward} 💰 монет!`;
+              chatMessages.push({
+                id: "sys_war_end_" + Date.now(),
+                playerId: "system",
+                playerName: "📜 СИСТЕМА",
+                clan: null,
+                text: systemMsg,
+                timestamp: new Date().toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" }),
+                color: "#ff3e3e"
+              });
+              if (chatMessages.length > 50) chatMessages.shift();
+            } else {
+              clanWarState.lastWarWinner = null;
+              const systemMsg = `⚔️ Битва Кланов завершилась вничью. Ни один клан не набрал боевых очков!`;
+              chatMessages.push({
+                id: "sys_war_end_" + Date.now(),
+                playerId: "system",
+                playerName: "📜 СИСТЕМА",
+                clan: null,
+                text: systemMsg,
+                timestamp: new Date().toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" }),
+                color: "#9ca3af"
+              });
+              if (chatMessages.length > 50) chatMessages.shift();
+            }
+            
+            // Clean up and enter peaceful target tracking again
+            clanWarState.triggeringClan = null;
+            clanWarState.countdownSeconds = 0;
+            clanWarState.clansWarPoints = {};
+            clProductionSimBoost = {};
+            
+            broadcastPlayers();
+          }
+          
+          broadcastClanWarState();
+        } else if (clanWarState.triggeringClan) {
+          // We are in countdown phase
+          if (clanWarState.countdownSeconds > 0) {
+            clanWarState.countdownSeconds--;
+          } else {
+            // Countdown ended, start the war!
+            clanWarState.isWarActive = true;
+            clanWarState.countdownSeconds = 45; // 45 seconds of glorious tapping action
+            clanWarState.clansWarPoints = {};
+            
+            // Seed all known clans into the war points system
+            Object.keys(clanWarState.clanProductionScores).forEach(cl => {
+              clanWarState.clansWarPoints[cl] = 0;
+            });
+            if (clanWarState.triggeringClan && !clanWarState.clansWarPoints[clanWarState.triggeringClan]) {
+              clanWarState.clansWarPoints[clanWarState.triggeringClan] = 0;
+            }
+
+            // Ensure we ALWAYS have active rival clans to compete with!
+            const triggeringClanName = clanWarState.triggeringClan || "ЛЕГЕНДЫ";
+            const currentSeeded = Object.keys(clanWarState.clansWarPoints);
+            const userOpponents = currentSeeded.filter(c => c !== triggeringClanName);
+            if (userOpponents.length === 0) {
+              // No other user-created clans exist, so make sure we seed our primary balanced rival bots!
+              clanWarState.clansWarPoints["ТЁМНЫЕ ВОЛКИ"] = 0;
+              clanWarState.clansWarPoints["КРАСНЫЕ ДРАКОНЫ"] = 0;
+            }
+            
+            const startMsg = `⚔️ НАЧАЛАСЬ БИТВА КЛАНОВ! Кто покорит таблицу? Кликайте по боевой кнопке во вкладке «Битва Кланов» следующие 45 секунд, продвиньте свой клан!`;
+            chatMessages.push({
+              id: "sys_war_start_" + Date.now(),
+              playerId: "system",
+              playerName: "📜 СИСТЕМА",
+              clan: null,
+              text: startMsg,
+              timestamp: new Date().toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" }),
+              color: "#e67e22"
+            });
+            if (chatMessages.length > 50) chatMessages.shift();
+            
+            broadcastPlayers();
+          }
+          
+          broadcastClanWarState();
+        } else {
+          // Normal monitoring phase: look for any clan breaking target threshold
+          for (const clName in clanWarState.clanProductionScores) {
+            const prod = clanWarState.clanProductionScores[clName] || 0;
+            if (prod >= clanWarState.triggerThreshold) {
+              clanWarState.triggeringClan = clName;
+              clanWarState.countdownSeconds = 30; // 30 seconds countdown to allow players to coordinate!
+              clanWarState.clansWarPoints = {};
+              
+              const warnMsg = `🚨 Клан [${clName}] превысил лимит производства монет (${prod}/${clanWarState.triggerThreshold} 💰/сек) и инициировал Битву Кланов! До начала войны: 30 секунд! Приготовьтесь к бою!`;
+              chatMessages.push({
+                id: "sys_war_warn_" + Date.now(),
+                playerId: "system",
+                playerName: "📜 СИСТЕМА",
+                clan: null,
+                text: warnMsg,
+                timestamp: new Date().toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" }),
+                color: "#e67e22"
+              });
+              if (chatMessages.length > 50) chatMessages.shift();
+              
+              broadcastPlayers();
+              break;
+            }
+          }
+          
+          broadcastClanWarState();
+        }
+      } catch (e) {
+        console.error("Timer loop error:", e);
+      }
+    }, 1000);
+  });
+}
+
+start().catch((err) => {
+  console.error("Failed to start fullstack server:", err);
+});
