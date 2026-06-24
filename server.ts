@@ -178,6 +178,7 @@ interface Player {
   sheetId?: string | null;
   notificationsEnabled?: boolean;
   clickPowerLevel?: number;
+  email?: string | null;
 }
 
 interface ChatMessage {
@@ -491,7 +492,8 @@ wss.on("connection", (ws: WebSocket) => {
               lastSeen: Date.now(),
               isOnline: true,
               telegramId: telegramId || null,
-              autoClickerLevel: typeof autoClickerLevel === "number" ? autoClickerLevel : 0
+              autoClickerLevel: typeof autoClickerLevel === "number" ? autoClickerLevel : 0,
+              email: email || null
             });
 
             // Log in Google Sheets if applicable
@@ -715,24 +717,34 @@ wss.on("connection", (ws: WebSocket) => {
                 const isMentionAll = mentions.some(m => ["all", "все", "всем", "everyone"].includes(m));
 
                 if (isMentionAll) {
-                  // Notify everyone who has linked their Telegram (except the sender)
+                  // Notify everyone who has linked their Telegram/VK (except the sender)
                   players.forEach((p) => {
                     if (p.id !== senderId && p.telegramId) {
-                      sendCleanBotMessage(
-                        Number(p.telegramId),
-                        `📣 *Всеобщее упоминание от ${player.name} в чате:* \n\n"${textContent}"`,
-                        {
-                          keepHistory: true,
-                          reply_markup: {
-                            inline_keyboard: [
-                              [
-                                { text: "❌ Удалить", callback_data: "delete_this" },
-                                { text: "🧹 Удалить все", callback_data: "delete_all" }
+                      const isVkTarget = (p.email && String(p.email).startsWith("vk_")) || 
+                                         (p.username && String(p.username).startsWith("vk_")) ||
+                                         String(p.id).startsWith("vk_");
+                      if (isVkTarget) {
+                        sendVkMessage(
+                          Number(p.telegramId),
+                          `📣 *Всеобщее упоминание от ${player.name} в чате:*\n\n"${textContent}"`
+                        ).catch(err => console.error(`Failed to send VK @all notification to ${p.name}:`, err));
+                      } else {
+                        sendCleanBotMessage(
+                          Number(p.telegramId),
+                          `📣 *Всеобщее упоминание от ${player.name} в чате:* \n\n"${textContent}"`,
+                          {
+                            keepHistory: true,
+                            reply_markup: {
+                              inline_keyboard: [
+                                [
+                                  { text: "❌ Удалить", callback_data: "delete_this" },
+                                  { text: "🧹 Удалить все", callback_data: "delete_all" }
+                                ]
                               ]
-                            ]
+                            }
                           }
-                        }
-                      ).catch(err => console.error(`Failed to send @all notification to ${p.name}:`, err));
+                        ).catch(err => console.error(`Failed to send @all notification to ${p.name}:`, err));
+                      }
                     }
                   });
                 } else {
@@ -750,21 +762,31 @@ wss.on("connection", (ws: WebSocket) => {
                       );
 
                       if (isMatched) {
-                        sendCleanBotMessage(
-                          Number(p.telegramId),
-                          `🔔 *Вас упомянул ${player.name} в общем чате:* \n\n"${textContent}"`,
-                          {
-                            keepHistory: true,
-                            reply_markup: {
-                              inline_keyboard: [
-                                [
-                                  { text: "❌ Удалить", callback_data: "delete_this" },
-                                  { text: "🧹 Удалить все", callback_data: "delete_all" }
+                        const isVkTarget = (p.email && String(p.email).startsWith("vk_")) || 
+                                           (p.username && String(p.username).startsWith("vk_")) ||
+                                           String(p.id).startsWith("vk_");
+                        if (isVkTarget) {
+                          sendVkMessage(
+                            Number(p.telegramId),
+                            `🔔 *Вас упомянул ${player.name} в общем чате:*\n\n"${textContent}"`
+                          ).catch(err => console.error(`Failed to send VK mention notification to ${p.name}:`, err));
+                        } else {
+                          sendCleanBotMessage(
+                            Number(p.telegramId),
+                            `🔔 *Вас упомянул ${player.name} в общем чате:* \n\n"${textContent}"`,
+                            {
+                              keepHistory: true,
+                              reply_markup: {
+                                inline_keyboard: [
+                                  [
+                                    { text: "❌ Удалить", callback_data: "delete_this" },
+                                    { text: "🧹 Удалить все", callback_data: "delete_all" }
+                                  ]
                                 ]
-                              ]
+                              }
                             }
-                          }
-                        ).catch(err => console.error(`Failed to send mention notification to ${p.name}:`, err));
+                          ).catch(err => console.error(`Failed to send mention notification to ${p.name}:`, err));
+                        }
                       }
                     }
                   });
@@ -822,24 +844,35 @@ wss.on("connection", (ws: WebSocket) => {
             // Deliver back to sender socket
             ws.send(payload);
  
-             // Notify recipient via Telegram if offline (no active websocket socket open)
+             // Notify recipient via Telegram or VK if offline (no active websocket socket open)
              const recipient = players.get(recipientId);
              if (recipient && recipient.telegramId && !hasActiveSocket) {
-               sendCleanBotMessage(
-                 Number(recipient.telegramId), 
-                 `📩 *Новое личное сообщение от ${player.name}:*\n\n${text}`,
-                 {
-                    keepHistory: true,
-                    reply_markup: {
-                      inline_keyboard: [
-                        [
-                          { text: "❌ Удалить это сообщение", callback_data: "delete_this" },
-                          { text: "🧹 Удалить все уведомления", callback_data: "delete_all" }
+               const isVkRecipient = (recipient.email && String(recipient.email).startsWith("vk_")) || 
+                                     (recipient.username && String(recipient.username).startsWith("vk_")) ||
+                                     String(recipient.id).startsWith("vk_");
+               
+               if (isVkRecipient) {
+                 const vkMessageText = `📩 *Новое личное сообщение от ${player.name}:*\n\n${text}`;
+                 sendVkMessage(Number(recipient.telegramId), vkMessageText).catch(err => 
+                   console.error(`Failed to send VK DM notification to ${recipient.name}:`, err)
+                 );
+               } else {
+                 sendCleanBotMessage(
+                   Number(recipient.telegramId), 
+                   `📩 *Новое личное сообщение от ${player.name}:*\n\n${text}`,
+                   {
+                      keepHistory: true,
+                      reply_markup: {
+                        inline_keyboard: [
+                          [
+                            { text: "❌ Удалить это сообщение", callback_data: "delete_this" },
+                            { text: "🧹 Удалить все уведомления", callback_data: "delete_all" }
+                          ]
                         ]
-                      ]
+                      }
                     }
-                  }
-               );
+                 );
+               }
              }
           }
           break;

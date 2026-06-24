@@ -552,6 +552,7 @@ export default function App() {
   });
   const [activeFriendChatId, setActiveFriendChatId] = useState<string | null>(null);
   const activeFriendChatIdRef = useRef<string | null>(null);
+  const isVKAuthInProgressRef = useRef<boolean>(false);
 
   useEffect(() => {
     activeFriendChatIdRef.current = activeFriendChatId;
@@ -2176,7 +2177,11 @@ export default function App() {
 
       const existingIdx = accounts.findIndex((acc: any) => acc.uid === uid || (email && acc.email === email));
       const oldPass = existingIdx >= 0 ? accounts[existingIdx].password : undefined;
-      const finalPassword = password || oldPass;
+      let finalPassword = password || oldPass;
+      if (type === "vk" && email && !finalPassword) {
+        const vkUserId = email.replace("vk_", "").split("@")[0];
+        finalPassword = `vk_pass_${vkUserId}`;
+      }
 
       const accountData = {
         uid,
@@ -2223,10 +2228,17 @@ export default function App() {
   const handleSelectSavedAccount = async (account: any) => {
     if (isAccountSwitching) return;
     setIsAccountSwitching(true);
+    sessionStorage.setItem("skipVKAutoLogin", "true");
     addToast(`🔄 Вход в аккаунт "${account.displayName}"...`);
     try {
-      if ((account.type === "telegram" || account.type === "vk") && account.email && account.password) {
-        await signInWithEmailAndPassword(auth, account.email, account.password);
+      let finalPassword = account.password;
+      if (account.type === "vk" && account.email && !finalPassword) {
+        const vkUserId = account.email.replace("vk_", "").split("@")[0];
+        finalPassword = `vk_pass_${vkUserId}`;
+      }
+
+      if ((account.type === "telegram" || account.type === "vk") && account.email && finalPassword) {
+        await signInWithEmailAndPassword(auth, account.email, finalPassword);
         addToast(account.type === "vk" ? "🌐 Успешный вход под VK аккаунтом!" : "🤖 Успешный вход под Telegram аккаунтом!");
         setIsAccountSelectorOpen(false);
       } else if (account.type === "google") {
@@ -2287,6 +2299,7 @@ export default function App() {
       confirmText: "Да, выйти",
       cancelText: "Отмена",
       onConfirm: () => {
+        sessionStorage.setItem("skipVKAutoLogin", "true");
         setIsAuthLoading(true);
         setConfirmModal(null);
         signOut(auth);
@@ -2520,49 +2533,58 @@ export default function App() {
   };
 
   const performVKAuth = async (email: string, password: string, displayName: string, photoURL: string) => {
+    if (isVKAuthInProgressRef.current) {
+      console.log("VK Auth already in progress, skipping duplicate request.");
+      return;
+    }
+    isVKAuthInProgressRef.current = true;
     try {
-      const credential = await signInWithEmailAndPassword(auth, email, password);
-      if (credential.user) {
-        await updateProfile(credential.user, {
-          displayName: displayName || credential.user.displayName || "VK Player",
-          photoURL: photoURL || credential.user.photoURL || ""
-        });
-        saveAccountToLocalList(
-          credential.user.uid,
-          email,
-          displayName || credential.user.displayName || "VK Player",
-          photoURL || credential.user.photoURL || "",
-          "vk",
-          password,
-          coins
-        );
-      }
-    } catch (err: any) {
-      if (
-        err.code === "auth/user-not-found" || 
-        err.code === "auth/invalid-credential" || 
-        err.code === "auth/wrong-password" ||
-        err.code === "auth/invalid-login-credentials"
-      ) {
-        const credential = await createUserWithEmailAndPassword(auth, email, password);
+      try {
+        const credential = await signInWithEmailAndPassword(auth, email, password);
         if (credential.user) {
           await updateProfile(credential.user, {
-            displayName: displayName || "VK Player",
-            photoURL: photoURL || ""
+            displayName: displayName || credential.user.displayName || "VK Player",
+            photoURL: photoURL || credential.user.photoURL || ""
           });
           saveAccountToLocalList(
             credential.user.uid,
             email,
-            displayName || "VK Player",
-            photoURL || "",
+            displayName || credential.user.displayName || "VK Player",
+            photoURL || credential.user.photoURL || "",
             "vk",
             password,
             coins
           );
         }
-      } else {
-        throw err;
+      } catch (err: any) {
+        if (
+          err.code === "auth/user-not-found" || 
+          err.code === "auth/invalid-credential" || 
+          err.code === "auth/wrong-password" ||
+          err.code === "auth/invalid-login-credentials"
+        ) {
+          const credential = await createUserWithEmailAndPassword(auth, email, password);
+          if (credential.user) {
+            await updateProfile(credential.user, {
+              displayName: displayName || "VK Player",
+              photoURL: photoURL || ""
+            });
+            saveAccountToLocalList(
+              credential.user.uid,
+              email,
+              displayName || "VK Player",
+              photoURL || "",
+              "vk",
+              password,
+              coins
+            );
+          }
+        } else {
+          throw err;
+        }
       }
+    } finally {
+      isVKAuthInProgressRef.current = false;
     }
   };
 
@@ -2612,6 +2634,11 @@ export default function App() {
         console.log("VK Mini App: User already logged in as", expectedVkEmail, "- skipping auto login.");
         return;
       }
+
+      if (sessionStorage.getItem("skipVKAutoLogin") === "true") {
+        console.log("VK Mini App: skipVKAutoLogin flag detected in sessionStorage. Skipping auto login.");
+        return;
+      }
       
       if (hasVkParams) {
         // Automatically attempt to fetch user info and authorize if inside VK Mini App
@@ -2651,6 +2678,7 @@ export default function App() {
   const handleVKAuth = async () => {
     setIsAuthLoading(true);
     addToast("🌐 Инициализация VK Авторизации...");
+    sessionStorage.removeItem("skipVKAutoLogin");
     try {
       let userInfo;
       try {
@@ -2719,6 +2747,7 @@ export default function App() {
       confirmText: "Да, выйти",
       cancelText: "Отмена",
       onConfirm: () => {
+        sessionStorage.setItem("skipVKAutoLogin", "true");
         setIsAuthLoading(true);
         setConfirmModal(null);
         signOut(auth);
@@ -2767,6 +2796,7 @@ export default function App() {
       confirmText: "Да, выйти",
       cancelText: "Отмена",
       onConfirm: () => {
+        sessionStorage.setItem("skipVKAutoLogin", "true");
         setIsAuthLoading(true);
         setConfirmModal(null);
         signOut(auth);
@@ -5904,6 +5934,7 @@ export default function App() {
                     addToast("⚠️ Вы уже вошли под этим ID!");
                     return;
                   }
+                  sessionStorage.setItem("skipVKAutoLogin", "true");
                   localStorage.setItem("myPlayerIdV9", swapPlayerId);
                   if (auth?.currentUser) {
                     try {
