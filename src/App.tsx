@@ -537,7 +537,10 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
+  const mutedPlayersRef = useRef<string[]>(mutedPlayers);
+
   useEffect(() => {
+    mutedPlayersRef.current = mutedPlayers;
     localStorage.setItem("gameMutedPlayersV9", JSON.stringify(mutedPlayers));
   }, [mutedPlayers]);
 
@@ -1205,15 +1208,19 @@ export default function App() {
                 const newMsg: ChatMessage = message.data;
                 const isHidden = document.hidden;
                 
-                if (activeMainTabRef.current !== "chat" || isHidden) {
+                // If sender is muted, ignore notifications entirely
+                const isMuted = mutedPlayersRef.current.includes(newMsg.playerId);
+                
+                if (!isMuted && (activeMainTabRef.current !== "chat" || isHidden)) {
                   setHasUnreadChat(true);
                   if (newMsg.playerId !== effectivePlayerId) {
                     playNotificationSound();
                   }
                 }
                 
-                // If this is from someone else and mentions our name
+                // If this is from someone else and mentions our name, and sender is not muted
                 if (
+                  !isMuted &&
                   newMsg.playerId !== effectivePlayerId && 
                   newMsg.text && 
                   playerName && 
@@ -1246,8 +1253,11 @@ export default function App() {
                 const dm = message.data;
                 const conversationWith = dm.senderId === effectivePlayerId ? dm.recipientId : dm.senderId;
                 
-                // Show notification if it's an incoming message and the chat isn't currently open
-                if (dm.recipientId && dm.recipientId === effectivePlayerId && (activeFriendChatIdRef.current !== dm.senderId || document.hidden)) {
+                // If sender is muted, ignore notification triggers
+                const isMuted = mutedPlayersRef.current.includes(dm.senderId);
+                
+                // Show notification if it's an incoming message and the chat isn't currently open, and they are not muted
+                if (!isMuted && dm.recipientId && dm.recipientId === effectivePlayerId && (activeFriendChatIdRef.current !== dm.senderId || document.hidden)) {
                   playNotificationSound();
                   
                   if (activeFriendChatIdRef.current !== dm.senderId) {
@@ -4379,7 +4389,11 @@ export default function App() {
                                 <span className="text-[8px] bg-slate-850 text-amber-300 font-black px-2 py-0.5 rounded-md border border-amber-500/10 shrink-0 uppercase tracking-wider font-mono">⭐ ДРУГ</span>
                               )}
                               <button
-                                onClick={() => setActiveFriendChatId(p.id)}
+                                onClick={() => {
+                                  setActiveMainTab("social");
+                                  setActiveSocialTab("friends");
+                                  setActiveFriendChatId(p.id);
+                                }}
                                 className="w-8 h-8 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 flex items-center justify-center cursor-pointer transition-colors border border-emerald-500/30"
                                 title="Написать сообщение"
                               >
@@ -4451,14 +4465,11 @@ export default function App() {
                                   <span className="text-[8px] bg-slate-850 text-amber-300 font-black px-2 py-0.5 rounded-md border border-amber-500/10 shrink-0 uppercase tracking-wider font-mono">⭐ ДРУГ</span>
                                 )}
                                 <button
-                                  onClick={() => setActiveFriendChatId(p.id)}
-                                  className="w-8 h-8 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 flex items-center justify-center cursor-pointer transition-colors border border-emerald-500/30"
-                                  title="Написать сообщение"
-                                >
-                                  <MessageCircle className="w-4 h-4 text-emerald-400" />
-                                </button>
-                                <button
-                                  onClick={() => setActiveFriendChatId(p.id)}
+                                  onClick={() => {
+                                    setActiveMainTab("social");
+                                    setActiveSocialTab("friends");
+                                    setActiveFriendChatId(p.id);
+                                  }}
                                   className="w-8 h-8 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 flex items-center justify-center cursor-pointer transition-colors border border-emerald-500/30"
                                   title="Написать сообщение"
                                 >
