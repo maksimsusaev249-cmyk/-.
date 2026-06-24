@@ -982,6 +982,7 @@ export default function App() {
   const [floatingTexts, setFloatingTexts] = useState<ClickSparkle[]>([]);
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [networkConnected, setNetworkConnected] = useState(false);
+  const [serverInstanceId, setServerInstanceId] = useState<string | null>(null);
   const [networkEventNotice, setNetworkEventNotice] = useState<string | null>(null);
 
   // --- REFS FOR ACTION STACK ---
@@ -1140,10 +1141,13 @@ export default function App() {
                 setIsSyncing(false);
                 break;
               case "init": {
-                const { players: serverPlayers, chatHistory, assignedColor, clanPrivacy, clanWarState: initWarState, marketplaceListings: serverListings } = message.data;
+                const { players: serverPlayers, chatHistory, assignedColor, clanPrivacy, clanWarState: initWarState, marketplaceListings: serverListings, instanceId } = message.data;
                 setOnlinePlayers(serverPlayers);
                 setGlobalChatHistory(chatHistory || []);
                 setPlayerColor(assignedColor);
+                if (instanceId) {
+                  setServerInstanceId(instanceId);
+                }
                 if (initWarState) {
                   setClanWarState(initWarState);
                 }
@@ -6755,10 +6759,11 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-905/60 border border-white/5 shadow-sm">
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-905/60 border border-white/5 shadow-sm" title="Server Instance ID">
             <span className={`w-1 h-1 rounded-full ${networkConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`}></span>
-            <span className="text-[8.5px] text-[#aab3c4] font-semibold tracking-wider font-mono uppercase">
+            <span className="text-[8.5px] text-[#aab3c4] font-semibold tracking-wider font-mono uppercase flex items-center gap-1">
               {networkConnected ? "Online" : "Offline"}
+              {networkConnected && serverInstanceId && <span className="opacity-50 font-bold ml-1">[{serverInstanceId}]</span>}
             </span>
           </div>
         </div>

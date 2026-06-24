@@ -193,6 +193,8 @@ interface ChatMessage {
 }
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const SERVER_INSTANCE_ID = crypto.randomBytes(4).toString("hex").toUpperCase();
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -514,6 +516,7 @@ wss.on("connection", (ws: WebSocket) => {
                 clanPrivacy: getClansPrivacyList(),
                 clanWarState: clanWarState,
                 marketplaceListings: currentMarketplaceListings,
+                instanceId: SERVER_INSTANCE_ID,
               },
             }));
 
