@@ -2566,7 +2566,7 @@ export default function App() {
     }
   };
 
-  const initVKMiniApp = React.useCallback(() => {
+  const initVKMiniApp = React.useCallback((skipAutoLoginIfAlreadyAuthenticated = true) => {
     const searchParams = new URLSearchParams(window.location.search);
     
     // Auto-detect version for VK
@@ -2604,7 +2604,15 @@ export default function App() {
         console.warn("Failed to send AppReady event");
       }
       
-      const hasVkParams = Array.from(searchParams.keys()).some(k => k.startsWith("vk_") || k === "viewer_id" || k === "api_id");
+      const vkUserId = searchParams.get("vk_user_id") || searchParams.get("viewer_id");
+      const expectedVkEmail = vkUserId ? `vk_${vkUserId}@vk.com` : null;
+
+      // Check if we are already logged in as this VK user to skip redundant toast/sign-in
+      if (skipAutoLoginIfAlreadyAuthenticated && expectedVkEmail && auth?.currentUser?.email === expectedVkEmail) {
+        console.log("VK Mini App: User already logged in as", expectedVkEmail, "- skipping auto login.");
+        return;
+      }
+      
       if (hasVkParams) {
         // Automatically attempt to fetch user info and authorize if inside VK Mini App
         addToast("🌐 VK Mini App обнаружено! Вход...");
@@ -2634,9 +2642,11 @@ export default function App() {
 
   // --- VK MINI APP AUTOMATIC INIT & DETECTION ---
   useEffect(() => {
-    initVKMiniApp();
+    if (!isAuthLoading) {
+      initVKMiniApp(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthLoading]);
 
   const handleVKAuth = async () => {
     setIsAuthLoading(true);
