@@ -5824,7 +5824,7 @@ export default function App() {
               {/* Notification History */}
               <div className="flex flex-col gap-2">
                 <label className="text-xs text-gray-400 font-extrabold uppercase tracking-wide">Последние уведомления</label>
-                <div className="flex flex-col gap-1 bg-black/20 p-2 rounded-xl border border-white/5">
+                <div className="flex flex-col gap-1 bg-black/20 p-2 rounded-xl border border-white/5 min-h-[96px] h-24 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10">
                   {toastHistory.length > 0 ? toastHistory.map((toast, index) => (
                     <div key={index} className="text-[10px] text-gray-400 font-mono border-b border-white/5 pb-1 last:border-0 last:pb-0">
                       {index + 1}. {toast}
