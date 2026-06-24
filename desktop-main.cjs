@@ -39,7 +39,7 @@ function createWindow() {
   });
 
   // Connect to the live game server
-  const liveUrl = "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app";
+  const liveUrl = "https://klik-klan-scm6.onrender.com";
   
   console.log("Launching Клик Клан desktop client. Connecting to central server:", liveUrl);
   mainWindow.loadURL(liveUrl);
@@ -49,7 +49,7 @@ function createWindow() {
     console.log("Live server connection failed, retrying...");
     setTimeout(() => {
       if (mainWindow) {
-        mainWindow.loadURL("https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app");
+        mainWindow.loadURL("https://klik-klan-scm6.onrender.com");
       }
     }, 2000);
   });

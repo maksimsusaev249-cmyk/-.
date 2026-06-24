@@ -946,6 +946,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : false;
   });
   const [hasUnreadChat, setHasUnreadChat] = useState(false);
+  const [swapPlayerId, setSwapPlayerId] = useState("");
 
   // --- LEVEL SCALE SYSTEM ---
   const getPlayerLevelInfo = (clicks: number) => {
@@ -1260,6 +1261,10 @@ export default function App() {
               }
               case "direct_msg_broadcast": {
                 const dm = message.data;
+                // Secure check: only process direct messages meant for us
+                if (!dm || (dm.senderId !== effectivePlayerId && dm.recipientId !== effectivePlayerId)) {
+                  break;
+                }
                 const conversationWith = dm.senderId === effectivePlayerId ? dm.recipientId : dm.senderId;
                 
                 // If sender is muted, ignore notification triggers
@@ -1505,14 +1510,14 @@ export default function App() {
   };
 
   // --- ACTIONS ---
-  const addToast = (msg: string) => {
+  const addToast = React.useCallback((msg: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, text: msg }]);
     setToastHistory((prev) => [msg, ...prev].slice(0, 5));
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 2000);
-  };
+  }, []);
 
   // --- LEVEL UP REWARDS TRACKER & STORAGE PERSISTENCE ---
   useEffect(() => {
@@ -2630,7 +2635,8 @@ export default function App() {
   // --- VK MINI APP AUTOMATIC INIT & DETECTION ---
   useEffect(() => {
     initVKMiniApp();
-  }, [initVKMiniApp]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleVKAuth = async () => {
     setIsAuthLoading(true);
@@ -5839,6 +5845,74 @@ export default function App() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Switch Player by ID Section */}
+        <div className="flex flex-col gap-3 bg-black/20 p-4 rounded-2xl border border-white/5 animate-fade-in shadow-inner">
+          <span className="text-[10px] text-amber-400 font-black uppercase tracking-wider flex items-center gap-1.5 font-mono">
+            🔑 Смена профиля по ID
+          </span>
+          <p className="text-[10px] text-gray-400 leading-normal font-semibold">
+            Вы можете переключиться на другого игрока или восстановить доступ, введя специальный Player ID:
+          </p>
+          <div className="bg-slate-950/60 p-3 rounded-xl border border-white/5 flex flex-col gap-2">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-gray-400">Ваш текущий ID:</span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono font-black text-amber-300 bg-slate-950 px-2 py-0.5 rounded border border-white/5 select-all">{effectivePlayerId}</span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(effectivePlayerId);
+                      addToast("📋 ID скопирован в буфер обмена!");
+                    } catch (e) {}
+                  }}
+                  className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold rounded cursor-pointer text-gray-300 border-none transition-colors"
+                >
+                  Копировать
+                </button>
+              </div>
+            </div>
+            
+            <div className="flex gap-2 mt-1">
+              <input 
+                type="text"
+                placeholder="Введите Player ID"
+                value={swapPlayerId}
+                onChange={(e) => setSwapPlayerId(e.target.value.toUpperCase().trim())}
+                className="flex-1 p-2.5 bg-slate-950 border border-slate-800 focus:border-amber-500/50 text-xs rounded-xl outline-none text-white font-mono"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!swapPlayerId.trim()) {
+                    addToast("⚠️ Введите ID игрока!");
+                    return;
+                  }
+                  if (swapPlayerId === effectivePlayerId) {
+                    addToast("⚠️ Вы уже вошли под этим ID!");
+                    return;
+                  }
+                  localStorage.setItem("myPlayerIdV9", swapPlayerId);
+                  if (auth?.currentUser) {
+                    try {
+                      await signOut(auth);
+                    } catch (e) {
+                      console.error("Signout error during player swap:", e);
+                    }
+                  }
+                  addToast("🔄 Переключение игрока... Страница перезагружается!");
+                  setTimeout(() => {
+                    window.location.reload();
+                  }, 1200);
+                }}
+                className="px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center transition-all active:scale-95 border-none outline-none cursor-pointer"
+              >
+                Сменить 🔄
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Desktop Launcher Section */}

@@ -705,15 +705,85 @@ wss.on("connection", (ws: WebSocket) => {
                 type: "chat_msg_broadcast",
                 data: newMsg,
               });
+
+              // Process mentions (@all or specific players) in global chat for Telegram notifications
+              const textContent = newMsg.text;
+              const mentionRegex = /@([\w\u0400-\u04FF]+)/g;
+              const matches = textContent.match(mentionRegex);
+              if (matches && matches.length > 0) {
+                const mentions = matches.map(m => m.substring(1).toLowerCase());
+                const isMentionAll = mentions.some(m => ["all", "все", "всем", "everyone"].includes(m));
+
+                if (isMentionAll) {
+                  // Notify everyone who has linked their Telegram (except the sender)
+                  players.forEach((p) => {
+                    if (p.id !== senderId && p.telegramId) {
+                      sendCleanBotMessage(
+                        Number(p.telegramId),
+                        `📣 *Всеобщее упоминание от ${player.name} в чате:* \n\n"${textContent}"`,
+                        {
+                          keepHistory: true,
+                          reply_markup: {
+                            inline_keyboard: [
+                              [
+                                { text: "❌ Удалить", callback_data: "delete_this" },
+                                { text: "🧹 Удалить все", callback_data: "delete_all" }
+                              ]
+                            ]
+                          }
+                        }
+                      ).catch(err => console.error(`Failed to send @all notification to ${p.name}:`, err));
+                    }
+                  });
+                } else {
+                  // Notify specific mentioned players
+                  players.forEach((p) => {
+                    if (p.id !== senderId && p.telegramId) {
+                      const nameLower = p.name ? p.name.toLowerCase() : "";
+                      const usernameLower = p.username ? p.username.toLowerCase() : "";
+                      const firstWordOfName = nameLower.split(/\s+/)[0];
+
+                      const isMatched = mentions.some(m => 
+                        nameLower === m || 
+                        usernameLower === m || 
+                        firstWordOfName === m
+                      );
+
+                      if (isMatched) {
+                        sendCleanBotMessage(
+                          Number(p.telegramId),
+                          `🔔 *Вас упомянул ${player.name} в общем чате:* \n\n"${textContent}"`,
+                          {
+                            keepHistory: true,
+                            reply_markup: {
+                              inline_keyboard: [
+                                [
+                                  { text: "❌ Удалить", callback_data: "delete_this" },
+                                  { text: "🧹 Удалить все", callback_data: "delete_all" }
+                                ]
+                              ]
+                            }
+                          }
+                        ).catch(err => console.error(`Failed to send mention notification to ${p.name}:`, err));
+                      }
+                    }
+                  });
+                }
+              }
             }
           }
           break;
         }
 
         case "direct_msg": {
-          const { playerId: senderId, recipientId, text } = event.data;
+          const senderId = (ws as any).playerId;
+          const { recipientId, text } = event.data;
+          if (!senderId) {
+            console.warn("[DirectMsg Fail] Sender socket is not registered!");
+            break;
+          }
           const player = players.get(senderId);
-          if (player && text.trim() && recipientId) {
+          if (player && text.trim() && recipientId && recipientId !== "undefined" && recipientId !== "null") {
             const timeStr = new Date().toLocaleTimeString("ru-RU", {
               timeZone: "Europe/Moscow",
               hour: "2-digit",
@@ -735,17 +805,22 @@ wss.on("connection", (ws: WebSocket) => {
               data: newMsg
             });
 
-             // Deliver to recipient socket if online and track if they have an active connection
+            // Deliver to recipient socket if online and track if they have an active connection
             let hasActiveSocket = false;
             wss.clients.forEach((client) => {
-              if (client.readyState === WebSocket.OPEN && (client as any).playerId === recipientId) {
+              const clientPlayerId = (client as any).playerId;
+              if (
+                client.readyState === WebSocket.OPEN && 
+                clientPlayerId && 
+                clientPlayerId === recipientId
+              ) {
                 client.send(payload);
                 hasActiveSocket = true;
               }
             });
  
-             // Deliver back to sender socket
-             ws.send(payload);
+            // Deliver back to sender socket
+            ws.send(payload);
  
              // Notify recipient via Telegram if offline (no active websocket socket open)
              const recipient = players.get(recipientId);
@@ -1211,7 +1286,7 @@ async function startVkBotPolling() {
             } else if (mappedText.toLowerCase() === "/play") {
               const inlineKbd = JSON.stringify({
                 inline: true,
-                buttons: [[{ action: { type: "open_link", link: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app", label: "🎮 Открыть Игру" } }]]
+                buttons: [[{ action: { type: "open_link", link: process.env.APP_URL || "https://klik-klan-scm6.onrender.com", label: "🎮 Открыть Игру" } }]]
               });
               await sendVkMessage(peer_id, "🎮 *Погнали играть!*\n\nЗапускай игру прямо сейчас по ссылке:", { keyboard: inlineKbd });
             } else if (mappedText.toLowerCase() === "/clear_chat") {
@@ -1581,7 +1656,7 @@ async function startTelegramBotPolling() {
                 reply_markup: {
                   inline_keyboard: [
                     [
-                      { text: "🎮 Открыть Игру", url: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app" }
+                      { text: "🎮 Открыть Игру", url: process.env.APP_URL || "https://klik-klan-scm6.onrender.com" }
                     ]
                   ]
                 }
