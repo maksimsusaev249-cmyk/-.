@@ -1069,9 +1069,32 @@ export default function App() {
   }, [coins, clickPowerLevel, autoClickerLevel, energyLevel, energy, maxEnergy, regenRate, totalClicks, playerName, playerPhotoURL, playerClan, currentQuest, friendsList, currentUser, linkedTelegramId]);
 
   const saveToFirestoreRef = useRef<any>(null);
+  const playerStateRef = useRef({ playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled });
   useEffect(() => {
     saveToFirestoreRef.current = saveToFirestore;
+    playerStateRef.current = { playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled };
   });
+
+  // Automatically save on tab close
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (auth.currentUser) {
+        // We use the ref to ensure we have the latest save function without adding it to dependencies
+        saveToFirestoreRef.current(auth.currentUser, true, true);
+        if (auth.currentUser.email?.startsWith("vk_")) {
+          const state = playerStateRef.current;
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_coins", value: String(state.coins) }).catch(() => {});
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_click_power", value: String(state.clickPowerLevel) }).catch(() => {});
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_auto_clicker", value: String(state.autoClickerLevel) }).catch(() => {});
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_energy_level", value: String(state.energyLevel) }).catch(() => {});
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_total_clicks", value: String(state.totalClicks) }).catch(() => {});
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_player_name", value: state.playerName }).catch(() => {});
+        }
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   // --- MULTIPLAYER WEBSOCKET CONNECTIVITY ---
   useEffect(() => {
@@ -1102,18 +1125,19 @@ export default function App() {
           }
           setNetworkConnected(true);
           const tgId = linkedTelegramId || (currentUser?.email && currentUser.email.startsWith("tg_") ? String(currentUser.email.split("@")[0].replace("tg_", "")) : null);
+          const state = playerStateRef.current;
           // Register player
           socket.send(JSON.stringify({
             type: "register",
             data: {
               id: effectivePlayerId,
-              name: playerName,
-              clan: playerClan,
-              coins,
-              clicks: totalClicks,
-              color: playerColor,
+              name: state.playerName,
+              clan: state.playerClan,
+              coins: state.coins,
+              clicks: state.totalClicks,
+              color: state.playerColor,
               telegramId: tgId || undefined,
-              autoClickerLevel: autoClickerLevel,
+              autoClickerLevel: state.autoClickerLevel,
               email: currentUser?.email || undefined
             }
           }));
@@ -2295,16 +2319,19 @@ export default function App() {
     }
   };
 
-  const handleGoogleSignOut = () => {
+  const handleGoogleSignOut = async () => {
     setConfirmModal({
       isOpen: true,
       title: "Выход из аккаунта",
       message: "Вы действительно хотите выйти из своего аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
       confirmText: "Да, выйти",
       cancelText: "Отмена",
-      onConfirm: () => {
-        sessionStorage.setItem("skipVKAutoLogin", "true");
+      onConfirm: async () => {
         setIsAuthLoading(true);
+        if (currentUser) {
+          await saveToFirestore(currentUser, true);
+        }
+        sessionStorage.setItem("skipVKAutoLogin", "true");
         setConfirmModal(null);
         signOut(auth);
       }
@@ -2743,16 +2770,20 @@ export default function App() {
     }
   };
 
-  const handleVKSignOut = () => {
+  const handleVKSignOut = async () => {
     setConfirmModal({
       isOpen: true,
       title: "Выход из аккаунта",
       message: "Вы действительно хотите выйти из своего VK аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
       confirmText: "Да, выйти",
       cancelText: "Отмена",
-      onConfirm: () => {
-        sessionStorage.setItem("skipVKAutoLogin", "true");
+      onConfirm: async () => {
         setIsAuthLoading(true);
+        if (currentUser) {
+          await saveToFirestore(currentUser, true);
+          await syncWithVKCloud();
+        }
+        sessionStorage.setItem("skipVKAutoLogin", "true");
         setConfirmModal(null);
         signOut(auth);
       }
@@ -2792,16 +2823,19 @@ export default function App() {
     }
   };
 
-  const handleTelegramSignOut = () => {
+  const handleTelegramSignOut = async () => {
     setConfirmModal({
       isOpen: true,
       title: "Выход из аккаунта",
       message: "Вы действительно хотите выйти из своего Telegram аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
       confirmText: "Да, выйти",
       cancelText: "Отмена",
-      onConfirm: () => {
-        sessionStorage.setItem("skipVKAutoLogin", "true");
+      onConfirm: async () => {
         setIsAuthLoading(true);
+        if (currentUser) {
+          await saveToFirestore(currentUser, true);
+        }
+        sessionStorage.setItem("skipVKAutoLogin", "true");
         setConfirmModal(null);
         signOut(auth);
       }
