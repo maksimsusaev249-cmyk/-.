@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { collection, getDocs, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { handleFirestoreError, OperationType } from "../utils/firebaseUtils";
+import { getApiUrl } from "../utils/api";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, BarChart, Bar, Cell, Legend } from "recharts";
 import { Users, LayoutDashboard, Settings2, Trash2, ShieldAlert, Award, ArrowLeft, MessageSquare, Store, CheckCircle, Clock, Send, AlertCircle, RefreshCw, Settings } from "lucide-react";
 
@@ -91,7 +92,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch("/api/admin/config");
+      const res = await fetch(getApiUrl("/api/admin/config"));
       if (res.ok) {
         const data = await res.json();
         setCfgSheetId(data.masterSheetId || "");
@@ -106,7 +107,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
   const handleSaveConfig = async () => {
     setIsSavingConfig(true);
     try {
-      const res = await fetch("/api/admin/config", {
+      const res = await fetch(getApiUrl("/api/admin/config"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -197,7 +198,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
     if (!replyText.trim()) return;
     setSendingReplies(prev => ({ ...prev, [ticketId]: true }));
     try {
-      const res = await fetch("/api/support-reply", {
+      const res = await fetch(getApiUrl("/api/support-reply"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chatId: chatIdOrTelegramId, message: replyText })

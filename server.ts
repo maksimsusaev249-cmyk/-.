@@ -83,6 +83,19 @@ try {
   console.error("WARNING: Failed to read/parse firebase-applet-config.json:", configErr);
 }
 
+// Fallback to environment variables if config was not read or is incomplete
+if (!firebaseConfig || !firebaseConfig.apiKey) {
+  firebaseConfig = {
+    projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "",
+    appId: process.env.FIREBASE_APP_ID || process.env.VITE_FIREBASE_APP_ID || "",
+    apiKey: process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || "",
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || process.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+    firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID || process.env.FIRESTORE_DATABASE_ID || "(default)",
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  };
+}
+
 // Initialize client SDK for bot lookup to bypass IAM permissions issues
 let botClientApp: any = null;
 let botClientAuth: any = null;
@@ -178,7 +191,7 @@ interface ChatMessage {
   isClanOnly?: boolean;
 }
 
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

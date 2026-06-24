@@ -48,6 +48,7 @@ import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, add
 import { onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { Leaderboard } from "./components/Leaderboard";
 import { AdminConsole } from "./components/AdminConsole";
+import { getApiUrl } from "./utils/api";
 import vkBridge from "@vkontakte/vk-bridge";
 
 enum OperationType {
@@ -580,7 +581,7 @@ export default function App() {
     const syncClock = async () => {
       try {
         const start = Date.now();
-        const res = await fetch("/api/time");
+        const res = await fetch(getApiUrl("/api/time"));
         const data = await res.json();
         const end = Date.now();
         // Calculate network roundtrip latency delay
@@ -1077,8 +1078,16 @@ export default function App() {
 
     function connect() {
       try {
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        let wsUrl = "";
+        const customApiUrl = (import.meta.env.VITE_API_URL as string) || "";
+        if (customApiUrl) {
+          const wsProtocol = customApiUrl.startsWith("https:") ? "wss:" : "ws:";
+          const cleanHost = customApiUrl.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+          wsUrl = `${wsProtocol}//${cleanHost}/ws`;
+        } else {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          wsUrl = `${protocol}//${window.location.host}/ws`;
+        }
         
         const socket = new WebSocket(wsUrl);
         socketRef.current = socket;
@@ -2116,7 +2125,7 @@ export default function App() {
 
         // Notify the Telegram Bot if they are a Telegram player and NOT triggered by the bot itself
         if (tgId && !isFromTelegramBot) {
-          fetch("/api/telegram-notify-save", {
+          fetch(getApiUrl("/api/telegram-notify-save"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2292,7 +2301,7 @@ export default function App() {
     }
     setIsTelegramLoggingIn(true);
     try {
-      const res = await fetch("/api/telegram-code-login", {
+      const res = await fetch(getApiUrl("/api/telegram-code-login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: telegramCode.trim() })
@@ -2318,7 +2327,7 @@ export default function App() {
     // 1. Fetch dynamic Telegram config with retry
     const fetchTelegramConfig = async (retries = 3, delay = 1000) => {
       try {
-        const r = await fetch("/api/telegram-config");
+        const r = await fetch(getApiUrl("/api/telegram-config"));
         if (!active) return;
         const ct = r.headers.get("content-type");
         if (r.ok && ct && ct.includes("application/json")) {
@@ -2346,7 +2355,7 @@ export default function App() {
         const tg = (window as any).Telegram?.WebApp;
         if (tg && tg.initData) {
           console.log("Automatic Telegram Mini App login detected...");
-          const res = await fetch("/api/telegram-auth", {
+          const res = await fetch(getApiUrl("/api/telegram-auth"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ initData: tg.initData })
@@ -2373,7 +2382,7 @@ export default function App() {
 
   const requestNewGameAuthCode = async (retries = 3, delay = 1000) => {
     try {
-      const res = await fetch("/api/telegram-login-code");
+      const res = await fetch(getApiUrl("/api/telegram-login-code"));
       const ct = res.headers.get("content-type");
       if (res.ok && ct && ct.includes("application/json")) {
         const data = await res.json();
@@ -2406,7 +2415,7 @@ export default function App() {
 
     const intervalId = setInterval(async () => {
       try {
-        const res = await fetch(`/api/telegram-login-poll?code=${gameAuthCode}`);
+        const res = await fetch(getApiUrl(`/api/telegram-login-poll?code=${gameAuthCode}`));
         const ct = res.headers.get("content-type");
         if (!res.ok || !ct || !ct.includes("application/json")) {
           // Skip parsing if it's not a JSON response (e.g., server reloading or returning error page)
@@ -2426,7 +2435,7 @@ export default function App() {
               addToast("🎉 Telegram успешно привязан к вашему аккаунту!");
               
               // Notify the bot the link was successful
-              fetch("/api/telegram-notify-save", {
+              fetch(getApiUrl("/api/telegram-notify-save"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2708,7 +2717,7 @@ export default function App() {
     }
     setIsTelegramLoggingIn(true);
     try {
-      const res = await fetch("/api/telegram-code-login", {
+      const res = await fetch(getApiUrl("/api/telegram-code-login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: telegramCode.trim() })
@@ -2761,7 +2770,7 @@ export default function App() {
       // 2. Notify the bot
       const tgId = currentUser.email && currentUser.email.startsWith("tg_") ? String(currentUser.email.split("@")[0].replace("tg_", "")) : null;
       if (tgId) {
-        fetch("/api/telegram-toggle-notifications", {
+        fetch(getApiUrl("/api/telegram-toggle-notifications"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -3089,7 +3098,7 @@ export default function App() {
       setIsBuying(true);
       
       // Attempt to log the trade to the Google sheet
-      fetch("/api/log-trade", {
+      fetch(getApiUrl("/api/log-trade"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

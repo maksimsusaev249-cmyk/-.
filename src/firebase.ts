@@ -2,10 +2,19 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import firebaseConfigRaw from '../firebase-applet-config.json';
-const firebaseConfig = (firebaseConfigRaw && Object.keys(firebaseConfigRaw).length > 0) ? (firebaseConfigRaw as any) : null;
+
+const firebaseConfig = {
+  projectId: firebaseConfigRaw?.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
+  appId: firebaseConfigRaw?.appId || import.meta.env.VITE_FIREBASE_APP_ID || "",
+  apiKey: firebaseConfigRaw?.apiKey || import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: firebaseConfigRaw?.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+  firestoreDatabaseId: firebaseConfigRaw?.firestoreDatabaseId || import.meta.env.VITE_FIREBASE_DATABASE_ID || "",
+  storageBucket: firebaseConfigRaw?.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: firebaseConfigRaw?.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || ""
+};
 
 let app;
-if (firebaseConfig) {
+if (firebaseConfig.apiKey) {
   try {
     app = initializeApp(firebaseConfig);
   } catch (e) {
