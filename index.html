@@ -2,9 +2,40 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Клик Клан</title>
     <link rel="icon" type="image/jpeg" href="/images/app_icon.jpg" />
+    <script>
+      // Global safety guard to handle cross-origin script errors gracefully under iFrame restrictions
+      window.onerror = function (message, url, line, col, error) {
+        if (message === 'Script error.' || (message && (message.indexOf('telegram') !== -1 || message.indexOf('vk') !== -1))) {
+          console.warn('Handled iframe cross-origin script exception via onerror:', message);
+          return true; // Suppress the default browser error reporting
+        }
+        return false;
+      };
+
+      window.addEventListener('error', function (e) {
+        if (e && (e.message === 'Script error.' || (e.message && (e.message.indexOf('telegram') !== -1 || e.message.indexOf('vk') !== -1)))) {
+          console.warn('Handled iframe cross-origin script exception via event listener:', e.message || e);
+          try {
+            e.preventDefault();
+            e.stopPropagation();
+          } catch (_) {}
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function (e) {
+        const reason = e.reason && e.reason.message;
+        if (reason === 'Script error.' || (reason && (reason.indexOf('telegram') !== -1 || reason.indexOf('vk') !== -1))) {
+          console.warn('Handled iframe unhandledrejection exception:', reason);
+          try {
+            e.preventDefault();
+            e.stopPropagation();
+          } catch (_) {}
+        }
+      });
+    </script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>

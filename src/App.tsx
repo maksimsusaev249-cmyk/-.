@@ -7,6 +7,15 @@ import {
   Users, 
   Shield, 
   Star, 
+  LogOut,
+  KeyRound,
+  ArrowRight,
+  ExternalLink,
+  Monitor,
+  Smartphone,
+  Search,
+  Home,
+  HelpCircle,
   Check, 
   ChevronRight, 
   User, 
@@ -28,16 +37,18 @@ import {
   Menu,
   Calendar,
   Swords,
+  MessageCircle,
 } from "lucide-react";
 const swordImg = "/images/item_sword.jpg";
 const potionImg = "/images/item_potion.jpg";
 const shieldImg = "/images/item_shield.jpg";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db, googleProvider, signInWithPopup, signOut } from "./firebase";
-import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, updateDoc, runTransaction } from "firebase/firestore";
+import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, updateDoc, runTransaction, limit } from "firebase/firestore";
 import { onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { Leaderboard } from "./components/Leaderboard";
 import { AdminConsole } from "./components/AdminConsole";
+import vkBridge from "@vkontakte/vk-bridge";
 
 enum OperationType {
   CREATE = 'create',
@@ -69,12 +80,12 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+      emailVerified: auth?.currentUser?.emailVerified,
+      isAnonymous: auth?.currentUser?.isAnonymous,
+      tenantId: auth?.currentUser?.tenantId,
+      providerInfo: auth?.currentUser?.providerData?.map(provider => ({
         providerId: provider.providerId,
         email: provider.email,
       })) || []
@@ -83,27 +94,36 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  
+  if (errInfo.error.includes("Quota exceeded")) {
+    alert("Квота Firebase исчерпана. Пожалуйста, попробуйте снова завтра.");
+  }
 }
 
 
 const playPurchaseSound = () => {
-  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const oscillator = audioCtx.createOscillator();
-  const gainNode = audioCtx.createGain();
+  try {
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const audioCtx = new Ctx();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
 
-  oscillator.connect(gainNode);
-  gainNode.connect(audioCtx.destination);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
 
-  oscillator.type = 'sine';
-  oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
 
-  gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
 
-  oscillator.start(audioCtx.currentTime);
-  oscillator.stop(audioCtx.currentTime + 0.1);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + 0.1);
+  } catch(e) {
+    console.error("Audio playback error:", e);
+  }
 };
 
 
@@ -130,6 +150,8 @@ interface ChatMessage {
   timestamp: string;
   color: string;
   isClanOnly?: boolean;
+  senderId?: string;
+  senderName?: string;
 }
 
 interface ClickSparkle {
@@ -147,6 +169,197 @@ interface Quest {
   desc: string;
 }
 
+const playNotificationReceivedChime = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    
+    // First tone (higher-pitched double chime)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(880, ctx.currentTime); // A5
+    gain1.gain.setValueAtTime(0, ctx.currentTime);
+    gain1.gain.linearRampToValueAtTime(0.12, ctx.currentTime + 0.015);
+    gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(ctx.currentTime);
+    osc1.stop(ctx.currentTime + 0.12);
+
+    // Second tone (slightly higher, delayed by 0.08s)
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = "sine";
+    osc2.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.08); // D6
+    gain2.gain.setValueAtTime(0, ctx.currentTime);
+    gain2.gain.setValueAtTime(0, ctx.currentTime + 0.08);
+    gain2.gain.linearRampToValueAtTime(0.12, ctx.currentTime + 0.095);
+    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(ctx.currentTime);
+    osc2.stop(ctx.currentTime + 0.25);
+  } catch (e) {}
+};
+
+const playNotificationReceivedClassic = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+    osc.frequency.exponentialRampToValueAtTime(1046.50, ctx.currentTime + 0.15); // C6
+    
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.12, ctx.currentTime + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.22);
+  } catch (e) {}
+};
+
+const playNotificationReceivedTech = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(1200, ctx.currentTime);
+    osc.frequency.setValueAtTime(1500, ctx.currentTime + 0.05);
+    
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.15);
+  } catch (e) {}
+};
+
+const playNotificationSentPop = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(400, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.08);
+    
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.08);
+  } catch (e) {}
+};
+
+const playNotificationSentSwoosh = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(250, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1500, ctx.currentTime + 0.14);
+    
+    gain.gain.setValueAtTime(0.01, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.14, ctx.currentTime + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.14);
+  } catch (e) {}
+};
+
+const playNotificationSentRetro = () => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(900, ctx.currentTime + 0.12);
+    
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.12);
+  } catch (e) {}
+};
+
+const playNotificationSound = (customSoundKey?: string, forcePlay = false) => {
+  try {
+    const soundOn = localStorage.getItem("gameSoundEnabledV12") !== "false";
+    if (!soundOn && !forcePlay) return;
+
+    const selected = customSoundKey || localStorage.getItem("gameReceivedSoundV1") || "iphone-sound-message";
+
+    if (selected === "iphone-sound-message") {
+      playNotificationReceivedChime();
+    } else if (selected === "sine-synth") {
+      playNotificationReceivedClassic();
+    } else if (selected === "cyber-beep") {
+      playNotificationReceivedTech();
+    } else {
+      playNotificationReceivedChime();
+    }
+  } catch (e) {
+    // Audio context might be blocked if no user interaction yet, ignore
+  }
+};
+
+const playSentSound = (customSoundKey?: string, forcePlay = false) => {
+  try {
+    const soundOn = localStorage.getItem("gameSoundEnabledV12") !== "false";
+    if (!soundOn && !forcePlay) return;
+
+    const selected = customSoundKey || localStorage.getItem("gameSentSoundV1") || "iphone-sent-message";
+
+    if (selected === "iphone-sent-message") {
+      playNotificationSentPop();
+    } else if (selected === "iphone-message-swoosh") {
+      playNotificationSentSwoosh();
+    } else if (selected === "triangle-synth") {
+      playNotificationSentRetro();
+    } else {
+      playNotificationSentPop();
+    }
+  } catch (e) {
+    // Audio context might be blocked or ignored
+  }
+};
+
 export default function App() {
   // --- VERSION STATE ---
   const [appVersion, setAppVersion] = useState<"pc" | "mobile" | null>(() => {
@@ -156,91 +369,131 @@ export default function App() {
 
   // --- CORE GAME STATES ---
   const [coins, setCoins] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.coins === "number" ? parsed.coins : 0;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.coins === "number" ? parsed.coins : 0;
+      }
+    } catch (e) {
+      console.error("Failed to parse coins from gameDataV9", e);
     }
     return 0;
   });
 
   const [clickPowerLevel, setClickPowerLevel] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.clickPowerLevel === "number" ? parsed.clickPowerLevel : 1;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.clickPowerLevel === "number" ? parsed.clickPowerLevel : 1;
+      }
+    } catch (e) {
+      console.error("Failed to parse clickPowerLevel from gameDataV9", e);
     }
     return 1;
   });
 
   const [autoClickerLevel, setAutoClickerLevel] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.autoClickerLevel === "number" ? parsed.autoClickerLevel : 0;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.autoClickerLevel === "number" ? parsed.autoClickerLevel : 0;
+      }
+    } catch (e) {
+      console.error("Failed to parse autoClickerLevel from gameDataV9", e);
     }
     return 0;
   });
 
   const [energyLevel, setEnergyLevel] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.energyLevel === "number" ? parsed.energyLevel : 1;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.energyLevel === "number" ? parsed.energyLevel : 1;
+      }
+    } catch (e) {
+      console.error("Failed to parse energyLevel from gameDataV9", e);
     }
     return 1;
   });
 
   const [energy, setEnergy] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.energy === "number" ? parsed.energy : 100;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.energy === "number" ? parsed.energy : 100;
+      }
+    } catch (e) {
+      console.error("Failed to parse energy from gameDataV9", e);
     }
     return 100;
   });
 
   const [maxEnergy, setMaxEnergy] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.maxEnergy === "number" ? parsed.maxEnergy : 100;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.maxEnergy === "number" ? parsed.maxEnergy : 100;
+      }
+    } catch (e) {
+      console.error("Failed to parse maxEnergy from gameDataV9", e);
     }
     return 100;
   });
 
   const [regenRate, setRegenRate] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.regenRate === "number" ? parsed.regenRate : 1;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.regenRate === "number" ? parsed.regenRate : 1;
+      }
+    } catch (e) {
+      console.error("Failed to parse regenRate from gameDataV9", e);
     }
     return 1;
   });
 
   const [totalClicks, setTotalClicks] = useState<number>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return typeof parsed.totalClicks === "number" ? parsed.totalClicks : 0;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.totalClicks === "number" ? parsed.totalClicks : 0;
+      }
+    } catch (e) {
+      console.error("Failed to parse totalClicks from gameDataV9", e);
     }
     return 0;
   });
 
   const [playerName, setPlayerName] = useState<string>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return parsed.playerName || "Игрок";
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.playerName || "Игрок";
+      }
+    } catch (e) {
+      console.error("Failed to parse playerName from gameDataV9", e);
     }
     return "Игрок";
   });
 
   const [playerClan, setPlayerClan] = useState<string | null>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return parsed.playerClan || null;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.playerClan || null;
+      }
+    } catch (e) {
+      console.error("Failed to parse playerClan from gameDataV9", e);
     }
     return null;
   });
@@ -257,10 +510,14 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   const [currentQuest, setCurrentQuest] = useState<Quest>(() => {
-    const saved = localStorage.getItem("gameDataV9");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed.currentQuest) return parsed.currentQuest;
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.currentQuest) return parsed.currentQuest;
+      }
+    } catch (e) {
+      console.error("Failed to parse currentQuest from gameDataV9", e);
     }
     return { id: 1, type: "clicks", target: 100, reward: 100, desc: "Сделать 100 кликов" };
   });
@@ -274,6 +531,15 @@ export default function App() {
     const saved = localStorage.getItem("gameFriendsV9");
     return saved ? JSON.parse(saved) : [];
   });
+
+  const [mutedPlayers, setMutedPlayers] = useState<string[]>(() => {
+    const saved = localStorage.getItem("gameMutedPlayersV9");
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem("gameMutedPlayersV9", JSON.stringify(mutedPlayers));
+  }, [mutedPlayers]);
 
   // --- FRIEND CHAT (DIRECT MESSAGE) STATES ---
   const [directMessages, setDirectMessages] = useState<{ [friendId: string]: any[] }>(() => {
@@ -382,6 +648,11 @@ export default function App() {
   }, []);
 
   const [clansMap, setClansMap] = useState<{ [key: string]: Player[] }>({});
+  const [myFullClanMembers, setMyFullClanMembers] = useState<any[]>([]);
+  const [isLoadingMyClanMembers, setIsLoadingMyClanMembers] = useState(false);
+  const [clanVaultItems, setClanVaultItems] = useState<any[]>([]);
+  const [isLoadingClanVault, setIsLoadingClanVault] = useState<boolean>(false);
+  const [myClanActiveTab, setMyClanActiveTab] = useState<"players" | "vault">("players");
   const [activeMainTab, setActiveMainTab] = useState<"upgrades" | "quests" | "chat" | "shop" | "social" | "settings" | "clanwars">("upgrades");
   const [clanWarState, setClanWarState] = useState<any>({
     isWarActive: false,
@@ -520,8 +791,13 @@ export default function App() {
 
   // Level Up Rewards States
   const [levelItems, setLevelItems] = useState<any[]>(() => {
-    const saved = localStorage.getItem("gameLevelItemsV12");
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem("gameLevelItemsV12");
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
   const [lastClaimedLevel, setLastClaimedLevel] = useState<number>(() => {
     const saved = localStorage.getItem("gameLastClaimedLevelV12");
@@ -588,6 +864,21 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [syncProgress, setSyncProgress] = useState<number | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
+
+  // VK Bridge Initialization States
+  const [vkInitStatus, setVkInitStatus] = useState<"idle" | "initializing" | "success" | "error" | "not_vk">("idle");
+  const [vkInitError, setVkInitError] = useState<string | null>(null);
+
+  // Safety timeout for auth loading
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (isAuthLoading) {
+        console.warn("Auth initialization taking too long, forcing loading to false...");
+        setIsAuthLoading(false);
+      }
+    }, 1200); // Optimized for ultra-fast startup (from 3500ms to 1200ms)
+    return () => clearTimeout(timer);
+  }, [isAuthLoading]);
   
   // --- TELEGRAM AUTHENTICATION STATES ---
   const [telegramCode, setTelegramCode] = useState("");
@@ -600,6 +891,8 @@ export default function App() {
   const [editingName, setEditingName] = useState(playerName);
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
   const [clanSearchQuery, setClanSearchQuery] = useState("");
+  const [customSearchResults, setCustomSearchResults] = useState<any[] | null>(null);
+  const [isSearchingFirestore, setIsSearchingFirestore] = useState(false);
   
   // Clan state fields
   const [newClanName, setNewClanName] = useState("");
@@ -612,7 +905,36 @@ export default function App() {
   const [enteredJoinPassword, setEnteredJoinPassword] = useState("");
   
   const [chatMessageText, setChatMessageText] = useState("");
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("gameSoundEnabledV12");
+      return saved ? JSON.parse(saved) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const [sentSoundKey, setSentSoundKey] = useState<string>(() => {
+    return localStorage.getItem("gameSentSoundV1") || "iphone-sent-message";
+  });
+
+  const [receivedSoundKey, setReceivedSoundKey] = useState<string>(() => {
+    return localStorage.getItem("gameReceivedSoundV1") || "iphone-sound-message";
+  });
+
+  // Keep localStorage synced whenever soundEnabled changes
+  useEffect(() => {
+    localStorage.setItem("gameSoundEnabledV12", JSON.stringify(soundEnabled));
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("gameSentSoundV1", sentSoundKey);
+  }, [sentSoundKey]);
+
+  useEffect(() => {
+    localStorage.setItem("gameReceivedSoundV1", receivedSoundKey);
+  }, [receivedSoundKey]);
+
   const [toastHistory, setToastHistory] = useState<string[]>([]);
   const [telegramNotificationsEnabled, setTelegramNotificationsEnabled] = useState(true);
   const [isLiquidGlass, setIsLiquidGlass] = useState<boolean>(() => {
@@ -664,6 +986,41 @@ export default function App() {
   useEffect(() => {
     activeMainTabRef.current = activeMainTab;
   }, [activeMainTab]);
+
+  useEffect(() => {
+    if (activeMainTab === "social" && activeSocialTab === "clans" && playerClan) {
+      setIsLoadingMyClanMembers(true);
+      const q = query(collection(db, "users"), where("playerClan", "==", playerClan));
+      getDocs(q).then((snap) => {
+        const arr = snap.docs.map(d => ({id: d.id, ...d.data()}));
+        setMyFullClanMembers(arr);
+      }).catch(e => {
+        console.error("Error fetching full clan members:", e);
+      }).finally(() => {
+        setIsLoadingMyClanMembers(false);
+      });
+    }
+  }, [activeMainTab, activeSocialTab, playerClan]);
+
+  useEffect(() => {
+    if (playerClan) {
+      setIsLoadingClanVault(true);
+      const unsub = onSnapshot(doc(db, "clans", playerClan), (snap) => {
+        if (snap.exists() && Array.isArray(snap.data().vault)) {
+          setClanVaultItems(snap.data().vault);
+        } else {
+          setClanVaultItems([]);
+        }
+        setIsLoadingClanVault(false);
+      }, (error) => {
+        console.error("Error subscribing to clan vault:", error);
+        setIsLoadingClanVault(false);
+      });
+      return () => unsub();
+    } else {
+      setClanVaultItems([]);
+    }
+  }, [playerClan]);
 
   // --- SAVE CORE PROGRESS ON CHANGES ---
   useEffect(() => {
@@ -846,9 +1203,28 @@ export default function App() {
               }
               case "chat_msg_broadcast": {
                 const newMsg: ChatMessage = message.data;
-                if (activeMainTabRef.current !== "chat") {
+                const isHidden = document.hidden;
+                
+                if (activeMainTabRef.current !== "chat" || isHidden) {
                   setHasUnreadChat(true);
+                  if (newMsg.playerId !== effectivePlayerId) {
+                    playNotificationSound();
+                  }
                 }
+                
+                // If this is from someone else and mentions our name
+                if (
+                  newMsg.playerId !== effectivePlayerId && 
+                  newMsg.text && 
+                  playerName && 
+                  (newMsg.text.toLowerCase().includes(`@${playerName.toLowerCase()}`) || 
+                   newMsg.text.toLowerCase().includes("@всем") || 
+                   newMsg.text.toLowerCase().includes("@all"))
+                ) {
+                  addToast(`🔔 Вас упомянул ${newMsg.playerName} в чате: "${newMsg.text.slice(0, 30)}..."`);
+                  playNotificationSound();
+                }
+                
                 if (newMsg.isClanOnly) {
                   setClanChatHistory((prev) => {
                     // Deduplicate messages with same id
@@ -871,22 +1247,12 @@ export default function App() {
                 const conversationWith = dm.senderId === effectivePlayerId ? dm.recipientId : dm.senderId;
                 
                 // Show notification if it's an incoming message and the chat isn't currently open
-                if (dm.senderId !== effectivePlayerId && activeFriendChatIdRef.current !== dm.senderId) {
-                  addToast(`🤖 Уведомление: Новое ЛС от ${dm.senderName}`);
+                if (dm.recipientId && dm.recipientId === effectivePlayerId && (activeFriendChatIdRef.current !== dm.senderId || document.hidden)) {
+                  playNotificationSound();
                   
-                  // Optionally add a bot message to lobby chat locally to keep track of notifications
-                  setGlobalChatHistory(prev => {
-                    const botMsg: ChatMessage = {
-                      id: "bot_" + Date.now() + "_" + Math.random(),
-                      playerId: "SYSTEM_BOT",
-                      playerName: "🤖 Бот (Уведомления)",
-                      clan: null,
-                      text: `У вас новое сообщение от ${dm.senderName}. Чтобы открыть, найдите игрока в Социальной Сети или используйте /уведомления`,
-                      timestamp: formatMoscowTime(undefined, false),
-                      color: "#A0ABC0"
-                    };
-                    return [...prev, botMsg].slice(-50);
-                  });
+                  if (activeFriendChatIdRef.current !== dm.senderId) {
+                    addToast(`🤖 Уведомление: Новое ЛС от ${dm.senderName}`);
+                  }
                 }
 
                 setDirectMessages((prev) => {
@@ -970,26 +1336,71 @@ export default function App() {
   }, [networkEventNotice]);
 
   // --- ENERGY RESTORATION SYSTEM ---
+  const lastEnergyTickRef = useRef(Date.now());
   useEffect(() => {
-    const interval = setInterval(() => {
-      setEnergy((prev) => {
-        if (prev < maxEnergy) {
-          return Math.min(maxEnergy, prev + regenRate);
-        }
-        return prev;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
+    lastEnergyTickRef.current = Date.now();
+    const doTick = () => {
+      const now = Date.now();
+      const elapsed = Math.max(0, now - lastEnergyTickRef.current);
+      const ticks = Math.floor(elapsed / 1000);
+
+      if (ticks > 0) {
+        setEnergy((prev) => {
+          if (prev < maxEnergy) {
+            return Math.min(maxEnergy, prev + (regenRate * ticks));
+          }
+          return prev;
+        });
+        lastEnergyTickRef.current += ticks * 1000;
+      }
+    };
+
+    const interval = setInterval(doTick, 1000);
+    
+    // Instantly catch up when returning to the game tab
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") doTick();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", doTick);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", doTick);
+    };
   }, [maxEnergy, regenRate]);
 
   // --- AUTO CLICKER TICK ENGINE ---
+  const lastAutoTickRef = useRef(Date.now());
   useEffect(() => {
+    lastAutoTickRef.current = Date.now();
     if (autoClickerLevel > 0) {
-      const autoInterval = setInterval(() => {
-        const gain = Math.ceil(autoClickerLevel * 0.5);
-        setCoins((prev) => prev + gain);
-      }, 1000);
-      return () => clearInterval(autoInterval);
+      const doTick = () => {
+        const now = Date.now();
+        const elapsed = Math.max(0, now - lastAutoTickRef.current);
+        const ticks = Math.floor(elapsed / 1000);
+
+        if (ticks > 0) {
+          const gain = Math.ceil(autoClickerLevel * 0.5) * ticks;
+          setCoins((prev) => prev + gain);
+          lastAutoTickRef.current += ticks * 1000;
+        }
+      };
+
+      const autoInterval = setInterval(doTick, 1000);
+
+      const handleVisibility = () => {
+        if (document.visibilityState === "visible") doTick();
+      };
+      document.addEventListener("visibilitychange", handleVisibility);
+      window.addEventListener("focus", doTick);
+
+      return () => {
+        clearInterval(autoInterval);
+        document.removeEventListener("visibilitychange", handleVisibility);
+        window.removeEventListener("focus", doTick);
+      };
     }
   }, [autoClickerLevel]);
 
@@ -997,7 +1408,9 @@ export default function App() {
   const triggerAudio = () => {
     if (!soundEnabled) return;
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!Ctx) return;
+      const audioCtx = new Ctx();
       const osc = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
       
@@ -1318,6 +1731,7 @@ export default function App() {
          }
        }));
       setChatMessageText("");
+      playSentSound();
     } else {
       addToast("⚠️ Ошибка подключения. Сообщение не отправлено.");
     }
@@ -1325,10 +1739,22 @@ export default function App() {
 
   // --- GOOGLE AUTHENTICATION SYSTEM EFFECTS ---
   useEffect(() => {
+    if (!auth) {
+      console.error("Firebase Auth is not initialized. Check your configuration.");
+      setIsAuthLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser(user);
         setIsAuthLoading(false);
+        
+        if (!db) {
+          console.error("Firestore DB is not initialized.");
+          return;
+        }
+
         try {
           const docRef = doc(db, "users", user.uid);
           let docSnap;
@@ -1391,6 +1817,11 @@ export default function App() {
 
             setPlayerName(resolvedPlayerName);
             setEditingName(resolvedPlayerName);
+            if (user.photoURL) {
+              setPlayerPhotoURL(user.photoURL);
+            } else if (data.photoURL) {
+              setPlayerPhotoURL(data.photoURL);
+            }
             if (data.levelItems && Array.isArray(data.levelItems)) {
               setLevelItems(data.levelItems);
             }
@@ -1423,7 +1854,7 @@ export default function App() {
               user.email,
               resolvedPlayerName,
               user.photoURL || data.photoURL || null,
-              user.email?.startsWith("tg_") ? "telegram" : "google",
+              user.email?.startsWith("tg_") ? "telegram" : (user.email?.startsWith("vk_") ? "vk" : "google"),
               undefined,
               loadedCoins
             );
@@ -1435,16 +1866,61 @@ export default function App() {
             } else {
               setLinkedTelegramId(null);
             }
+            let finalCoins = coins;
+            let finalClickPower = clickPowerLevel;
+            let finalAutoClicker = autoClickerLevel;
+            let finalEnergyLevel = energyLevel;
+            let finalTotalClicks = totalClicks;
+            let finalPlayerName = user.displayName || playerName;
+
+            // Check VK Cloud storage backup if first login under a VK ID
+            if (user.email?.startsWith("vk_")) {
+              try {
+                const vkData = await vkBridge.send("VKWebAppStorageGet", {
+                  keys: ["vk_game_coins", "vk_game_click_power", "vk_game_auto_clicker", "vk_game_energy_level", "vk_game_total_clicks", "vk_game_player_name"]
+                });
+                if (vkData && vkData.keys) {
+                  const getVal = (keyName: string) => vkData.keys.find((k: any) => k.key === keyName)?.value;
+                  const cloudCoins = getVal("vk_game_coins");
+                  if (cloudCoins) {
+                    finalCoins = parseInt(cloudCoins) || 0;
+                    finalClickPower = parseInt(getVal("vk_game_click_power") || "1") || 1;
+                    finalAutoClicker = parseInt(getVal("vk_game_auto_clicker") || "0") || 0;
+                    finalEnergyLevel = parseInt(getVal("vk_game_energy_level") || "1") || 1;
+                    finalTotalClicks = parseInt(getVal("vk_game_total_clicks") || "0") || 0;
+                    finalPlayerName = getVal("vk_game_player_name") || finalPlayerName;
+                    
+                    // Update state variables locally
+                    setCoins(finalCoins);
+                    setClickPowerLevel(finalClickPower);
+                    setAutoClickerLevel(finalAutoClicker);
+                    setEnergyLevel(finalEnergyLevel);
+                    setTotalClicks(finalTotalClicks);
+                    setPlayerName(finalPlayerName);
+                    setEditingName(finalPlayerName);
+                    addToast("☁️ Прогресс восстановлен из Облака VK!");
+                  }
+                }
+              } catch (vkStorageErr) {
+                console.warn("Failed or skipped VK storage get:", vkStorageErr);
+              }
+            }
+
+            if (user.photoURL) {
+              setPlayerPhotoURL(user.photoURL);
+            }
+
             await setDoc(docRef, {
-              coins,
-              clickPowerLevel,
-              autoClickerLevel,
-              energyLevel,
+              coins: finalCoins,
+              clickPowerLevel: finalClickPower,
+              autoClickerLevel: finalAutoClicker,
+              energyLevel: finalEnergyLevel,
               energy,
               maxEnergy,
               regenRate,
-              totalClicks,
-              playerName: user.displayName || playerName,
+              totalClicks: finalTotalClicks,
+              playerName: finalPlayerName,
+              photoURL: user.photoURL || playerPhotoURL || "",
               playerClan,
               levelItems,
               currentQuest,
@@ -1462,7 +1938,7 @@ export default function App() {
               user.email,
               user.displayName || playerName,
               user.photoURL || null,
-              user.email?.startsWith("tg_") ? "telegram" : "google",
+              user.email?.startsWith("tg_") ? "telegram" : (user.email?.startsWith("vk_") ? "vk" : "google"),
               undefined,
               coins
             );
@@ -1480,6 +1956,105 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // --- CLAN VAULT TRANSACTIONS ---
+  const handleDepositToVault = async (item: any) => {
+    if (!effectivePlayerId || !playerClan) {
+      addToast("⚠️ Ошибка: Вы должны быть в клане для использования сейфа");
+      return;
+    }
+    
+    addToast("📦 Передаем предмет в сейф клана...");
+    try {
+      const userRef = doc(db, "users", effectivePlayerId);
+      const clanRef = doc(db, "clans", playerClan);
+      
+      await runTransaction(db, async (transaction) => {
+        const userSnap = await transaction.get(userRef);
+        const clanSnap = await transaction.get(clanRef);
+        
+        if (!userSnap.exists()) {
+          throw new Error("Профиль игрока не найден");
+        }
+        
+        const currentItems = userSnap.data().levelItems || [];
+        const itemIdx = currentItems.findIndex((i: any) => i.id === item.id);
+        if (itemIdx === -1) {
+          throw new Error("Предмет отсутствует в вашем инвентаре");
+        }
+        
+        const updatedUserItems = [...currentItems];
+        updatedUserItems.splice(itemIdx, 1);
+        
+        const currentVault = clanSnap.exists() ? (clanSnap.data().vault || []) : [];
+        const updatedVault = [...currentVault, {
+          ...item,
+          depositedBy: playerName || "Игрок",
+          depositedById: effectivePlayerId,
+          depositedAt: Date.now()
+        }];
+        
+        transaction.update(userRef, { levelItems: updatedUserItems });
+        if (clanSnap.exists()) {
+          transaction.update(clanRef, { vault: updatedVault });
+        } else {
+          transaction.set(clanRef, { vault: updatedVault });
+        }
+      });
+
+      // Update local state instantly and show toast
+      setLevelItems(prev => prev.filter(i => i.id !== item.id));
+      addToast("✅ Предмет успешно помещен в сейф клана!");
+    } catch (err: any) {
+      console.error("Vault deposit error:", err);
+      addToast(`⚠️ Ошибка: ${err.message || "Не удалось сохранить"}`);
+    }
+  };
+
+  const handleWithdrawFromVault = async (item: any) => {
+    if (!effectivePlayerId || !playerClan) return;
+    addToast("📦 Извлекаем предмет из сейфа...");
+    try {
+      const userRef = doc(db, "users", effectivePlayerId);
+      const clanRef = doc(db, "clans", playerClan);
+      
+      await runTransaction(db, async (transaction) => {
+        const userSnap = await transaction.get(userRef);
+        const clanSnap = await transaction.get(clanRef);
+        
+        if (!userSnap.exists()) {
+          throw new Error("Профиль игрока не найден");
+        }
+        if (!clanSnap.exists()) {
+          throw new Error("Сейф клана пуст!");
+        }
+        
+        const currentVault = clanSnap.data().vault || [];
+        const itemIdx = currentVault.findIndex((i: any) => i.id === item.id);
+        if (itemIdx === -1) {
+          throw new Error("Этого предмета уже нет в сейфе");
+        }
+        
+        const updatedVault = [...currentVault];
+        updatedVault.splice(itemIdx, 1);
+        
+        const { depositedBy, depositedById, depositedAt, ...cleanedItem } = item;
+        
+        const currentUserItems = userSnap.data().levelItems || [];
+        const updatedUserItems = [...currentUserItems, cleanedItem];
+        
+        transaction.update(userRef, { levelItems: updatedUserItems });
+        transaction.update(clanRef, { vault: updatedVault });
+      });
+
+      // Update local state instantly and show toast
+      setLevelItems(prev => [...prev, item]);
+      addToast("✅ Вы успешно забрали предмет из сейфа!");
+    } catch (err: any) {
+      console.error("Vault withdraw error:", err);
+      addToast(`⚠️ Ошибка: ${err.message || "Не удалось забрать"}`);
+    }
+  };
+
   // Sync to Firestore helper for triggering manually or on events
   const saveToFirestore = async (user = auth.currentUser, isManual = false, isFromTelegramBot = false, customCoins?: number) => {
     if (!user || isSyncing) return;
@@ -1491,10 +2066,10 @@ export default function App() {
       
       if (isManual) {
         setSyncProgress(0);
-        // We will increment progress up to 100% over 6 seconds
-        // 10 increments of 10% every 600ms
+        // We will increment progress up to 100% over 1.2 seconds
+        // 10 increments of 10% every 120ms for super-fast responsiveness
         for (let p = 10; p <= 100; p += 10) {
-          await new Promise((resolve) => setTimeout(resolve, 600));
+          await new Promise((resolve) => setTimeout(resolve, 120));
           setSyncProgress(p);
         }
       }
@@ -1520,6 +2095,11 @@ export default function App() {
         ...(tgId ? { telegramId: tgId } : {}),
         updatedAt: serverTimestamp()
       }, { merge: true });
+
+      // Secondary sync to VK Cloud storage if they are a VK user
+      if (user.email?.startsWith("vk_")) {
+        syncWithVKCloud(coinsToSave);
+      }
 
       if (isManual) {
         addToast("☁️ Облачное сохранение успешно! 💾");
@@ -1561,7 +2141,7 @@ export default function App() {
     email: string | null,
     displayName: string,
     photoURL: string | null,
-    type: "telegram" | "google",
+    type: "telegram" | "google" | "vk",
     password?: string,
     coinsValue?: number
   ) => {
@@ -1621,9 +2201,9 @@ export default function App() {
     setIsAccountSwitching(true);
     addToast(`🔄 Вход в аккаунт "${account.displayName}"...`);
     try {
-      if (account.type === "telegram" && account.email && account.password) {
+      if ((account.type === "telegram" || account.type === "vk") && account.email && account.password) {
         await signInWithEmailAndPassword(auth, account.email, account.password);
-        addToast("🤖 Успешный вход под Telegram аккаунтом!");
+        addToast(account.type === "vk" ? "🌐 Успешный вход под VK аккаунтом!" : "🤖 Успешный вход под Telegram аккаунтом!");
         setIsAccountSelectorOpen(false);
       } else if (account.type === "google") {
         setIsAccountSelectorOpen(false);
@@ -1682,16 +2262,10 @@ export default function App() {
       message: "Вы действительно хотите выйти из своего аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
       confirmText: "Да, выйти",
       cancelText: "Отмена",
-      onConfirm: async () => {
-        try {
-          await signOut(auth);
-          setConfirmModal(null);
-          window.location.reload();
-        } catch (error) {
-          addToast("⚠️ Ошибка при выходе.");
-          console.error(error);
-          setConfirmModal(null);
-        }
+      onConfirm: () => {
+        setIsAuthLoading(true);
+        setConfirmModal(null);
+        signOut(auth);
       }
     });
   };
@@ -1749,7 +2323,8 @@ export default function App() {
         if (retries > 0 && active) {
           setTimeout(() => fetchTelegramConfig(retries - 1, delay * 2), delay);
         } else {
-          console.error("Error loading telegram config:", err);
+          console.warn("Telegram config fetch failed, using default.");
+          setBotUsername("MyTelegramGameBot");
         }
       }
     };
@@ -1920,6 +2495,202 @@ export default function App() {
     }
   };
 
+  const performVKAuth = async (email: string, password: string, displayName: string, photoURL: string) => {
+    try {
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      if (credential.user) {
+        await updateProfile(credential.user, {
+          displayName: displayName || credential.user.displayName || "VK Player",
+          photoURL: photoURL || credential.user.photoURL || ""
+        });
+        saveAccountToLocalList(
+          credential.user.uid,
+          email,
+          displayName || credential.user.displayName || "VK Player",
+          photoURL || credential.user.photoURL || "",
+          "vk",
+          password,
+          coins
+        );
+      }
+    } catch (err: any) {
+      if (
+        err.code === "auth/user-not-found" || 
+        err.code === "auth/invalid-credential" || 
+        err.code === "auth/wrong-password" ||
+        err.code === "auth/invalid-login-credentials"
+      ) {
+        const credential = await createUserWithEmailAndPassword(auth, email, password);
+        if (credential.user) {
+          await updateProfile(credential.user, {
+            displayName: displayName || "VK Player",
+            photoURL: photoURL || ""
+          });
+          saveAccountToLocalList(
+            credential.user.uid,
+            email,
+            displayName || "VK Player",
+            photoURL || "",
+            "vk",
+            password,
+            coins
+          );
+        }
+      } else {
+        throw err;
+      }
+    }
+  };
+
+  const initVKMiniApp = React.useCallback(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    
+    // Auto-detect version for VK
+    const platform = searchParams.get("vk_platform");
+    const storedAppVersion = localStorage.getItem("appVersion");
+    if (!storedAppVersion && platform) {
+      if (platform === "desktop_web" || platform === "web") {
+        setAppVersion("pc");
+        localStorage.setItem("appVersion", "pc");
+      } else {
+        setAppVersion("mobile");
+        localStorage.setItem("appVersion", "mobile");
+      }
+    }
+
+    const hasVkParams = Array.from(searchParams.keys()).some(k => k.startsWith("vk_") || k === "viewer_id" || k === "api_id");
+    if (!hasVkParams) {
+      setVkInitStatus("not_vk");
+      return;
+    }
+
+    setVkInitStatus("initializing");
+    setVkInitError(null);
+    
+    console.log("Initializing VK Bridge for Mini App context...");
+    vkBridge.send("VKWebAppInit").then(() => {
+      console.log("VK Bridge connection initialized successfully!");
+      setVkInitStatus("success");
+      
+      // Notify VK that app is loaded and ready, hides the VK loading screen
+      try {
+        // @ts-ignore: VKWebAppAppReady might not be in the typescript definitions for this version
+        vkBridge.send("VKWebAppAppReady");
+      } catch (e) {
+        console.warn("Failed to send AppReady event");
+      }
+      
+      const hasVkParams = Array.from(searchParams.keys()).some(k => k.startsWith("vk_") || k === "viewer_id" || k === "api_id");
+      if (hasVkParams) {
+        // Automatically attempt to fetch user info and authorize if inside VK Mini App
+        addToast("🌐 VK Mini App обнаружено! Вход...");
+        
+        // Do not block the whole UI with isAuthLoading. Just do it in background or let the user click if it fails.
+        vkBridge.send("VKWebAppGetUserInfo").then(async (userInfo) => {
+          if (userInfo && userInfo.id) {
+            const vkEmail = `vk_${userInfo.id}@vk.com`;
+            const vkPass = `vk_pass_${userInfo.id}`;
+            const vkName = `${userInfo.first_name || ""} ${userInfo.last_name || ""}`.trim() || `VK Player ${userInfo.id}`;
+            const vkPhoto = userInfo.photo_200 || "";
+            
+            await performVKAuth(vkEmail, vkPass, vkName, vkPhoto);
+            addToast(`👋 Добро пожаловать, ${vkName}!`);
+          }
+        }).catch((authErr) => {
+          console.warn("Auto VK Auth failed or requires manual click:", authErr);
+        });
+      }
+      
+    }).catch((err: any) => {
+      console.error("VK Bridge initialization failed:", err);
+      setVkInitStatus("not_vk");
+      setVkInitError(err?.error_data?.error_reason || err?.message || "Не удалось инициализировать VK Bridge");
+    });
+  }, [addToast]);
+
+  // --- VK MINI APP AUTOMATIC INIT & DETECTION ---
+  useEffect(() => {
+    initVKMiniApp();
+  }, [initVKMiniApp]);
+
+  const handleVKAuth = async () => {
+    setIsAuthLoading(true);
+    addToast("🌐 Инициализация VK Авторизации...");
+    try {
+      let userInfo;
+      try {
+        userInfo = await vkBridge.send("VKWebAppGetUserInfo");
+      } catch (bridgeError) {
+        console.warn("VK Bridge simulation used:", bridgeError);
+        // Если мы не внутри VK iframe, генерируем тестовый аккаунт
+        if (!window.location.search.includes("vk_user_id") && !window.location.search.includes("viewer_id")) {
+          const simulatedId = Math.floor(1000000 + Math.random() * 9000000);
+          userInfo = {
+            id: simulatedId,
+            first_name: "VK Тестер",
+            last_name: String(simulatedId).slice(0, 4),
+            photo_200: "https://vk.com/images/camera_200.png"
+          };
+          addToast("🔧 Используется тестовый профиль (вне VK)");
+        } else {
+          throw bridgeError; // Бросаем реальную ошибку, если мы внутри VK но API не ответило
+        }
+      }
+      
+      if (userInfo && userInfo.id) {
+        const vkEmail = `vk_${userInfo.id}@vk.com`;
+        const vkPass = `vk_pass_${userInfo.id}`;
+        const vkName = `${userInfo.first_name || ""} ${userInfo.last_name || ""}`.trim() || `VK Player ${userInfo.id}`;
+        const vkPhoto = userInfo.photo_200 || "";
+        
+        await performVKAuth(vkEmail, vkPass, vkName, vkPhoto);
+        addToast(`👋 Успешный вход под VK аккаунтом: ${vkName}!`);
+      } else {
+        throw new Error("Не удалось получить данные профиля VK");
+      }
+    } catch (err: any) {
+      console.error(err);
+      addToast(`⚠️ Ошибка VK авторизации: ${err?.error_data?.error_reason || err?.message || err}`);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const syncWithVKCloud = async (customCoins?: number) => {
+    try {
+      if (currentUser?.email?.startsWith("vk_")) {
+        const coinsToSave = typeof customCoins === "number" ? customCoins : coins;
+        
+        await Promise.all([
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_coins", value: String(coinsToSave) }),
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_click_power", value: String(clickPowerLevel) }),
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_auto_clicker", value: String(autoClickerLevel) }),
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_energy_level", value: String(energyLevel) }),
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_total_clicks", value: String(totalClicks) }),
+          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_player_name", value: playerName })
+        ]);
+        console.log("Progress successfully synchronized with VK Cloud storage.");
+      }
+    } catch (e) {
+      console.warn("Sync skipped: not inside vk app scope or API unavailable.");
+    }
+  };
+
+  const handleVKSignOut = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Выход из аккаунта",
+      message: "Вы действительно хотите выйти из своего VK аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
+      confirmText: "Да, выйти",
+      cancelText: "Отмена",
+      onConfirm: () => {
+        setIsAuthLoading(true);
+        setConfirmModal(null);
+        signOut(auth);
+      }
+    });
+  };
+
   const handleTelegramCodeLogin = async () => {
     if (!telegramCode.trim()) {
       addToast("⚠️ Введите код авторизации!");
@@ -1936,6 +2707,8 @@ export default function App() {
       if (data && data.success && data.email && data.password) {
         await performTelegramAuth(data.email, data.password, data.displayName || "", data.photoURL || "");
         setTelegramCode("");
+        // Close admin console on successful login
+        setIsAdminConsoleOpen(false);
       } else {
         addToast(`❌ ${data.error || "Ошибка авторизации по коду."}`);
       }
@@ -1958,16 +2731,10 @@ export default function App() {
       message: "Вы действительно хотите выйти из своего Telegram аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
       confirmText: "Да, выйти",
       cancelText: "Отмена",
-      onConfirm: async () => {
-        try {
-          await signOut(auth);
-          addToast("🚪 Успешно вышли из Telegram.");
-          setConfirmModal(null);
-        } catch (error) {
-          addToast("⚠️ Ошибка при выходе.");
-          console.error(error);
-          setConfirmModal(null);
-        }
+      onConfirm: () => {
+        setIsAuthLoading(true);
+        setConfirmModal(null);
+        signOut(auth);
       }
     });
   };
@@ -2492,7 +3259,8 @@ export default function App() {
               console.warn("Failed to clean up saved accounts in reset", e);
             }
 
-            await signOut(auth);
+            setIsAuthLoading(true);
+            signOut(auth);
           }
           
           // Clear ALL local storage keys
@@ -2511,7 +3279,7 @@ export default function App() {
           // Wait 1 second to show toast, then reload for a fresh guest ID or clean login
           setTimeout(() => {
             window.location.reload();
-          }, 1000);
+          }, 500);
         } catch (error) {
           addToast("⚠️ Ошибка при сбросе.");
           console.error(error);
@@ -2668,6 +3436,7 @@ export default function App() {
         }
       }));
       setFriendChatMessageText("");
+      playSentSound();
     } else {
       addToast("⚠️ Ошибка подключения. Сообщение не отправлено.");
     }
@@ -2749,6 +3518,47 @@ export default function App() {
     );
   };
 
+  const parseChatMessageText = (text: string) => {
+    if (!text) return "";
+    const mentionRegex = /@([a-zA-ZА-Яа-я0-9_ёЁ\-]+)/g;
+    const parts = [];
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const matchIndex = match.index;
+      const wholeMention = match[0];
+      const username = match[1];
+      
+      if (matchIndex > lastIndex) {
+        parts.push(text.substring(lastIndex, matchIndex));
+      }
+      
+      const isCurrentUser = username.toLowerCase() === playerName.toLowerCase() || username.toLowerCase() === "всем" || username.toLowerCase() === "all";
+      
+      parts.push(
+        <span 
+          key={matchIndex} 
+          className={`px-1 rounded-md font-extrabold border select-all ${
+            isCurrentUser 
+              ? "bg-amber-500/35 text-amber-300 border-amber-500/50 shadow-[0_0_8px_rgba(245,158,11,0.2)] animate-pulse" 
+              : "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
+          }`}
+        >
+          {wholeMention}
+        </span>
+      );
+      
+      lastIndex = mentionRegex.lastIndex;
+    }
+    
+    if (lastIndex < text.length) {
+      parts.push(text.substring(lastIndex));
+    }
+    
+    return parts.length > 0 ? parts : text;
+  };
+
   const renderChatContent = () => {
     return (
       <div className="flex flex-col h-full justify-between min-h-0 text-white">
@@ -2810,7 +3620,7 @@ export default function App() {
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
                     </div>
-                    <p className="text-white font-medium select-text whitespace-pre-wrap break-all pr-1">{m.text}</p>
+                    <p className="text-white font-medium select-text whitespace-pre-wrap break-all pr-1">{parseChatMessageText(m.text)}</p>
                   </div>
                 );
               })
@@ -2821,46 +3631,78 @@ export default function App() {
                 Никто еще не писал в чат лобби. Будьте первыми!
               </div>
             ) : (
-              globalChatHistory.map((m) => {
+              globalChatHistory
+                .filter(m => !( (m.playerId === "SYSTEM_BOT" || m.playerId === "system") && m.text.includes("У вас новое сообщение от") ))
+                .filter(m => !mutedPlayers.includes(m.playerId))
+                .map((m) => {
                 const isSelf = m.playerId === effectivePlayerId;
+                const isSystem = m.playerId === "SYSTEM_BOT" || m.playerId === "system";
                 return (
                   <div 
                     key={m.id} 
-                    className={`p-2 rounded-xl flex flex-col gap-1 max-w-[90%] ${
+                    className={`p-3 rounded-xl flex flex-col gap-1.5 ${
                       isSelf 
-                        ? "bg-blue-600/30 border border-blue-500/20 self-end text-right" 
-                        : m.playerId === "SYSTEM_BOT"
-                        ? "bg-slate-800/90 border border-indigo-500/30 self-start shadow-md w-[95%]"
-                        : "bg-[#162239] border border-white/5 self-start"
+                        ? "bg-blue-600/30 border border-blue-500/20 self-end text-right max-w-[90%]" 
+                        : isSystem
+                        ? "bg-gradient-to-r from-[#1d1b4a]/70 to-[#0e172a]/70 border border-[#e67e22]/60 text-indigo-100 self-center shadow-[0_0_15px_rgba(230,126,34,0.15)] w-full text-center"
+                        : "bg-[#162239] border border-white/5 self-start max-w-[90%]"
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-[10px] font-bold">
-                      {m.playerId !== "SYSTEM_BOT" && (
+                    <div className={`flex items-center gap-1.5 text-[10px] font-bold ${
+                      isSystem ? "justify-center text-[#ffbc6e]" : ""
+                    }`}>
+                      {!isSystem && (
                         <span className="px-1.5 py-0.5 rounded-md bg-black/20 text-indigo-300 font-mono">
                           {m.clan ? `[${m.clan}]` : "Игрок"}
                         </span>
                       )}
                       <span 
-                        style={{ color: m.color }} 
-                        className="font-semibold cursor-pointer hover:underline block truncate max-w-[100px]"
-                        onClick={() => handleViewChatPlayerProfile(m.playerId, m.playerName)}
+                        style={{ color: isSystem ? "#e67e22" : m.color }} 
+                        className={`font-black cursor-pointer block truncate ${
+                          isSystem ? "text-xs select-none font-sans font-black tracking-wider text-[#ffbc6e] uppercase" : "hover:underline max-w-[100px]"
+                        }`}
+                        onClick={() => {
+                          if (!isSystem) {
+                            handleViewChatPlayerProfile(m.playerId, m.playerName);
+                          }
+                        }}
                       >
                         {m.playerName}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
                     </div>
-                    <p className={`text-white font-medium select-text whitespace-pre-wrap break-all pr-1 ${m.playerId === "SYSTEM_BOT" ? "text-[11px] leading-relaxed" : ""}`}>{m.text}</p>
+                    <p className={`text-white font-medium select-text whitespace-pre-wrap break-all pr-1 ${isSystem ? "text-[11px] leading-relaxed mx-auto text-center font-semibold text-gray-100 bg-black/10 py-1 px-2.5 rounded-lg border border-white/5" : ""}`}>
+                      {parseChatMessageText(m.text)}
+                    </p>
                     
                     {m.playerId === "SYSTEM_BOT" && (
-                      <button
-                        onClick={() => {
-                          setActiveMainTab("social");
-                          setActiveSocialTab("friends");
-                        }}
-                        className="mt-1.5 py-1.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-[10px] text-white font-black rounded-lg cursor-pointer transition-colors shadow flex items-center justify-center gap-1 w-full border-none outline-none"
-                      >
-                        ✉️ Открыть раздел сообщений
-                      </button>
+                      <div className="flex gap-2 mt-2 w-full">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMainTab("social");
+                            setActiveSocialTab("friends");
+                            if (m.senderId) {
+                              setActiveFriendChatId(m.senderId);
+                            }
+                            // Also automatically filter out this message locally so they don't have to clean it up
+                            setGlobalChatHistory(prev => prev.filter(msg => msg.id !== m.id));
+                          }}
+                          className="flex-1 py-1.5 px-3 bg-[#e67e22] hover:bg-[#d35400] text-[10px] text-white font-extrabold rounded-lg cursor-pointer transition-all shadow flex items-center justify-center gap-1 border-none outline-none"
+                        >
+                          ✉️ Открыть диалог
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Filter out this message from globalChatHistory locally
+                            setGlobalChatHistory(prev => prev.filter(msg => msg.id !== m.id));
+                          }}
+                          className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-[10px] text-gray-300 font-bold rounded-lg cursor-pointer transition-all border border-white/5 outline-none"
+                        >
+                          ❌ Скрыть
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -2871,18 +3713,18 @@ export default function App() {
         </div>
 
         {/* Message control inputs */}
-        <form onSubmit={sendChatMessage} className="mt-3 flex gap-1.5 pt-2.5 border-t border-white/5">
+        <form onSubmit={sendChatMessage} className="mt-3 flex items-center gap-1.5 pt-2.5 border-t border-white/5">
           <input 
             type="text" 
             value={chatMessageText}
             onChange={(e) => setChatMessageText(e.target.value)}
             maxLength={150}
             placeholder={chatChannel === "clan" ? "Напишите союзникам..." : "Напишите в общий чат..."}
-            className="flex-1 px-3 py-2 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
+            className="flex-1 h-9 px-3 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
           />
           <button 
             type="submit" 
-            className={`w-9 h-9 flex items-center justify-center rounded-xl shadow-md cursor-pointer transition-colors border-none outline-none ${
+            className={`w-9 h-9 flex items-center justify-center rounded-xl shadow-md cursor-pointer transition-colors border-none outline-none shrink-0 ${
               chatChannel === "clan" ? "bg-[#e67e22] hover:bg-[#d35400]" : "bg-blue-600 hover:bg-blue-500"
             }`}
           >
@@ -3362,6 +4204,52 @@ export default function App() {
     }, 850);
   };
 
+  const handleSearchPlayers = async () => {
+    if (!playerSearchQuery.trim()) {
+      setCustomSearchResults(null);
+      return;
+    }
+    setIsSearchingFirestore(true);
+    addToast("🔍 Поиск игроков по всей базе...");
+    try {
+      const q = query(collection(db, "users"), limit(150));
+      const snap = await getDocs(q);
+      const allDbPlayers = snap.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          name: data.playerName || data.name || data.displayName || "Без имени",
+          coins: data.coins || 0,
+          clan: data.playerClan || data.clan || null,
+          photoURL: data.photoURL || null,
+          isOnline: onlinePlayers.some(op => op.id === d.id)
+        };
+      });
+      const queryLower = playerSearchQuery.toLowerCase();
+      const filtered = allDbPlayers.filter(p => 
+        p.id !== effectivePlayerId && 
+        (p.name.toLowerCase().includes(queryLower) || (p.clan || "").toLowerCase().includes(queryLower))
+      );
+      setCustomSearchResults(filtered);
+      if (filtered.length === 0) {
+        addToast(`😟 Игроки по запросу "${playerSearchQuery}" не найдены`);
+      } else {
+        addToast(`✅ Найдено пользователей: ${filtered.length}`);
+      }
+    } catch (err) {
+      console.error("Firestore global user search error:", err);
+      // Fallback matching online players only
+      const foundOnline = onlinePlayers.filter(p => 
+        p.id !== effectivePlayerId && 
+        p.name.toLowerCase().includes(playerSearchQuery.toLowerCase())
+      );
+      setCustomSearchResults(foundOnline);
+      addToast("⚠️ Ошибка; поиск выполнен по игрокам в сети");
+    } finally {
+      setIsSearchingFirestore(false);
+    }
+  };
+
   const renderSocialContent = () => {
     return (
       <div className="flex flex-col h-full min-h-0 text-[#aab7c4]">
@@ -3373,7 +4261,7 @@ export default function App() {
               setActiveSocialTab("players");
               setPlayerSearchQuery("");
             }}
-            className={`py-2 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "players" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
@@ -3382,7 +4270,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSocialTab("clans")}
-            className={`py-2 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "clans" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
@@ -3391,7 +4279,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSocialTab("friends")}
-            className={`py-2 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "friends" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
@@ -3400,7 +4288,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSocialTab("leaderboard")}
-            className={`py-2 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "leaderboard" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
@@ -3417,9 +4305,30 @@ export default function App() {
                   type="text" 
                   placeholder="🔍 Поиск игрока..." 
                   value={playerSearchQuery}
-                  onChange={(e) => setPlayerSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPlayerSearchQuery(val);
+                    if (val.trim() === "") {
+                      setCustomSearchResults(null);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleSearchPlayers();
+                    }
+                  }}
                   className="flex-1 p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-white text-xs outline-none focus:border-slate-500 font-sans"
                 />
+                <button
+                  type="button"
+                  onClick={handleSearchPlayers}
+                  disabled={isSearchingFirestore}
+                  className="px-3.5 bg-[#e67e22] hover:bg-[#d35400] active:scale-95 text-white rounded-xl transition-all border border-white/5 cursor-pointer flex items-center justify-center gap-1.5 font-bold text-xs disabled:opacity-50"
+                  title="Найти игрока"
+                >
+                  <Search className="w-4 h-4 text-white" />
+                  <span className="hidden sm:inline">Найти</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleRefreshPlayers}
@@ -3431,14 +4340,17 @@ export default function App() {
                 </button>
               </div>
               <div className="flex flex-col gap-2.5">
-                {onlinePlayers.length === 0 ? (
-                  <div className="text-gray-500 text-center py-10 text-xs">
-                    Загрузка игроков лобби...
+                {isSearchingFirestore ? (
+                  <div className="text-gray-500 text-center py-10 text-xs animate-pulse">
+                    🔍 Поиск игроков в базе данных...
                   </div>
-                ) : (
-                  onlinePlayers
-                    .filter(p => p.id !== effectivePlayerId && p.isOnline && p.name.toLowerCase().includes(playerSearchQuery.toLowerCase()))
-                    .map((p) => {
+                ) : (customSearchResults !== null ? (
+                  customSearchResults.length === 0 ? (
+                    <div className="text-gray-500 text-center py-10 text-xs text-amber-400 font-bold border border-white/5 bg-slate-950/20 rounded-2xl p-6">
+                      🔍 Игроки по запросу "{playerSearchQuery}" не найдены в базе.
+                    </div>
+                  ) : (
+                    customSearchResults.map((p) => {
                       const isFriend = friendsList.includes(p.id);
                       return (
                         <div key={p.id} className="bg-[#162239] border border-white/5 rounded-2xl p-3 flex flex-col gap-3.5 shadow-sm">
@@ -3446,13 +4358,13 @@ export default function App() {
                             <div className="flex items-center gap-2 min-w-0 pr-2">
                               <div className="w-9 h-9 rounded-full bg-slate-950 flex items-center justify-center border border-white/10 shrink-0 overflow-hidden">
                                 {p.photoURL ? (
-                                  <img src={p.photoURL} className="w-full h-full object-cover" />
+                                  <img referrerPolicy="no-referrer" src={p.photoURL} className="w-full h-full object-cover" />
                                 ) : (
                                   <User className="w-5 h-5 text-gray-500" />
                                 )}
                               </div>
                               <div className="flex flex-col min-w-0">
-                                <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5">
+                                <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5 shrink-0">
                                   {p.name}
                                   <span className={`w-2 h-2 rounded-full ${p.isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-gray-500"} shrink-0`} title={p.isOnline ? "Онлайн" : "Офлайн"}></span>
                                 </span>
@@ -3467,6 +4379,13 @@ export default function App() {
                                 <span className="text-[8px] bg-slate-850 text-amber-300 font-black px-2 py-0.5 rounded-md border border-amber-500/10 shrink-0 uppercase tracking-wider font-mono">⭐ ДРУГ</span>
                               )}
                               <button
+                                onClick={() => setActiveFriendChatId(p.id)}
+                                className="w-8 h-8 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 flex items-center justify-center cursor-pointer transition-colors border border-emerald-500/30"
+                                title="Написать сообщение"
+                              >
+                                <MessageCircle className="w-4 h-4 text-emerald-400" />
+                              </button>
+                              <button
                                 onClick={() => setViewingProfile(p)}
                                 className="w-8 h-8 rounded-full bg-[#f1c40f]/20 hover:bg-[#f1c40f]/40 flex items-center justify-center cursor-pointer transition-colors border border-[#f1c40f]/30"
                                 title="Профиль игрока"
@@ -3475,124 +4394,395 @@ export default function App() {
                               </button>
                             </div>
                           </div>
-
-
                         </div>
                       );
                     })
-                )}
+                  )
+                ) : (
+                  onlinePlayers.length === 0 ? (
+                    <div className="text-gray-500 text-center py-10 text-xs animate-pulse">
+                      Загрузка игроков лобби...
+                    </div>
+                  ) : (
+                    (() => {
+                      const filtered = onlinePlayers.filter(p => {
+                        if (p.id === effectivePlayerId) return false;
+                        const matches = p.name.toLowerCase().includes(playerSearchQuery.toLowerCase());
+                        if (playerSearchQuery.trim() === "") {
+                          return p.isOnline; // Only online players if search query is empty
+                        }
+                        return matches; // All players matching query (online or offline) if searching
+                      });
+
+                      if (filtered.length === 0) {
+                        return (
+                          <div className="text-gray-500 text-center py-10 text-xs text-amber-400 font-bold border border-white/5 bg-slate-950/20 rounded-2xl p-6">
+                            🔍 Игроки по запросу "{playerSearchQuery}" не найдены.
+                          </div>
+                        );
+                      }
+
+                      return filtered.map((p) => {
+                        const isFriend = friendsList.includes(p.id);
+                        return (
+                          <div key={p.id} className="bg-[#162239] border border-white/5 rounded-2xl p-3 flex flex-col gap-3.5 shadow-sm">
+                            <div className="flex justify-between items-center px-0.5">
+                              <div className="flex items-center gap-2 min-w-0 pr-2">
+                                <div className="w-9 h-9 rounded-full bg-slate-950 flex items-center justify-center border border-white/10 shrink-0 overflow-hidden">
+                                  {p.photoURL ? (
+                                    <img referrerPolicy="no-referrer" src={p.photoURL} className="w-full h-full object-cover" />
+                                  ) : (
+                                    <User className="w-5 h-5 text-gray-500" />
+                                  )}
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                  <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5 shrink-0">
+                                    {p.name}
+                                    <span className={`w-2 h-2 rounded-full ${p.isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-gray-500"} shrink-0`} title={p.isOnline ? "Онлайн" : "Офлайн"}></span>
+                                  </span>
+                                  <span className="text-[10px] text-[#aab3c4] mt-0.5 font-mono truncate">
+                                    💰 {Math.floor(p.coins).toLocaleString()} | 🏰 {p.clan || "Без клана"}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div className="flex items-center gap-2 shrink-0">
+                                {isFriend && (
+                                  <span className="text-[8px] bg-slate-850 text-amber-300 font-black px-2 py-0.5 rounded-md border border-amber-500/10 shrink-0 uppercase tracking-wider font-mono">⭐ ДРУГ</span>
+                                )}
+                                <button
+                                  onClick={() => setActiveFriendChatId(p.id)}
+                                  className="w-8 h-8 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 flex items-center justify-center cursor-pointer transition-colors border border-emerald-500/30"
+                                  title="Написать сообщение"
+                                >
+                                  <MessageCircle className="w-4 h-4 text-emerald-400" />
+                                </button>
+                                <button
+                                  onClick={() => setActiveFriendChatId(p.id)}
+                                  className="w-8 h-8 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 flex items-center justify-center cursor-pointer transition-colors border border-emerald-500/30"
+                                  title="Написать сообщение"
+                                >
+                                  <MessageCircle className="w-4 h-4 text-emerald-400" />
+                                </button>
+                                <button
+                                  onClick={() => setViewingProfile(p)}
+                                  className="w-8 h-8 rounded-full bg-[#f1c40f]/20 hover:bg-[#f1c40f]/40 flex items-center justify-center cursor-pointer transition-colors border border-[#f1c40f]/30"
+                                  title="Профиль игрока"
+                                >
+                                  <Menu className="w-4 h-4 text-[#f1c40f]" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()
+                  )
+                ))}
               </div>
             </div>
           )}
 
           {activeSocialTab === "clans" && (
             <div className="flex flex-col gap-4">
-              <input 
-                type="text" 
-                placeholder="🔍 Поиск клана по названию..." 
-                value={clanSearchQuery}
-                onChange={(e) => setClanSearchQuery(e.target.value)}
-                className="w-full p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-white text-xs outline-none focus:border-slate-500 font-sans"
-              />
-
-              {/* Creation Area */}
-              <div className="bg-[#162239]/60 border border-[#e67e22]/20 rounded-2xl p-4 flex flex-col gap-3">
-                <span className="text-xs font-black text-[#ffbc6e] uppercase tracking-wider block">🏰 Основать новый клан</span>
-                <div className="flex gap-2">
-                  <input 
-                    type="text" 
-                    placeholder="Название клана..." 
-                    value={newClanName}
-                    onChange={(e) => setNewClanName(e.target.value)}
-                    className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-slate-600 font-sans"
-                  />
-                  <button 
-                    onClick={handleCreateClan}
-                    className="px-4 py-2 bg-[#e67e22] hover:bg-[#d35400] text-xs font-black rounded-xl text-white transition-colors cursor-pointer border-none"
-                  >
-                    Создать ⚔️
-                  </button>
-                </div>
-
-                {/* Privacy checkboxes & settings */}
-                <div className="flex flex-col gap-2 pt-1 border-t border-white/5">
-                  <label className="flex items-center gap-2 cursor-pointer mt-1">
-                    <input 
-                      type="checkbox" 
-                      checked={isClanPrivate} 
-                      onChange={(e) => setIsClanPrivate(e.target.checked)}
-                      className="w-3.5 h-3.5 accent-[#e67e22] cursor-pointer"
-                    />
-                    <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wider">🔒 Сделать клан приватным</span>
-                  </label>
-                  {isClanPrivate && (
-                    <input 
-                      type="text" 
-                      placeholder="Установите пароль входа..." 
-                      value={newClanPassword}
-                      onChange={(e) => setNewClanPassword(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 text-[11px] text-[#ffbc6e] tracking-wide outline-none focus:border-[#e67e22] mt-1 font-sans"
-                    />
-                  )}
-                </div>
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  placeholder="🔍 Поиск клана по названию..." 
+                  value={clanSearchQuery}
+                  onChange={(e) => setClanSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      addToast(`🔍 Поиск клана "${clanSearchQuery || "..."}"`);
+                    }
+                  }}
+                  className="flex-1 p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-white text-xs outline-none focus:border-slate-500 font-sans"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    addToast(`🔍 Поиск клана "${clanSearchQuery || "..."}"`);
+                  }}
+                  className="px-3.5 bg-[#e67e22] hover:bg-[#d35400] active:scale-95 text-white rounded-xl transition-all border border-white/5 cursor-pointer flex items-center justify-center gap-1.5 font-bold text-xs"
+                  title="Найти клан"
+                >
+                  <Search className="w-4 h-4 text-white" />
+                  <span className="hidden sm:inline">Найти</span>
+                </button>
               </div>
 
-              {/* Clans map renderer */}
+              {/* Creation Area */}
+              {!playerClan && (
+                <div className="bg-[#162239]/60 border border-[#e67e22]/20 rounded-2xl p-4 flex flex-col gap-3">
+                  <span className="text-xs font-black text-[#ffbc6e] uppercase tracking-wider block">🏰 Основать новый клан</span>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Название клана..." 
+                      value={newClanName}
+                      onChange={(e) => setNewClanName(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-slate-600 font-sans"
+                    />
+                    <button 
+                      onClick={handleCreateClan}
+                      className="px-4 py-2 bg-[#e67e22] hover:bg-[#d35400] text-xs font-black rounded-xl text-white transition-colors cursor-pointer border-none"
+                    >
+                      Создать ⚔️
+                    </button>
+                  </div>
+
+                  {/* Privacy checkboxes & settings */}
+                  <div className="flex flex-col gap-2 pt-1 border-t border-white/5">
+                    <label className="flex items-center gap-2 cursor-pointer mt-1">
+                      <input 
+                        type="checkbox" 
+                        checked={isClanPrivate} 
+                        onChange={(e) => setIsClanPrivate(e.target.checked)}
+                        className="w-3.5 h-3.5 accent-[#e67e22] cursor-pointer"
+                      />
+                      <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wider">🔒 Сделать клан приватным</span>
+                    </label>
+                    {isClanPrivate && (
+                      <input 
+                        type="text" 
+                        placeholder="Установите пароль входа..." 
+                        value={newClanPassword}
+                        onChange={(e) => setNewClanPassword(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 text-[11px] text-[#ffbc6e] tracking-wide outline-none focus:border-[#e67e22] mt-1 font-sans"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* My Clan block block */}
+              {playerClan && (
+                <div className="bg-[#111c2e] border border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.05)] rounded-2xl p-4 flex flex-col gap-3.5 select-none">
+                  {/* Clan Header */}
+                  <div className="flex justify-between items-center pb-2 border-b border-white/5">
+                    <span className="text-sm font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2">
+                       Мой Клан: {playerClan}
+                    </span>
+                    <button 
+                      onClick={handleLeaveClan}
+                      className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer border-none outline-none"
+                    >
+                      Покинуть ✕
+                    </button>
+                  </div>
+
+                  {/* Tabs matching the diagram: "игроки" and "предметы" under the 'тип клан' format */}
+                  <div className="flex gap-2 bg-black/45 p-1 rounded-xl border border-white/5 self-start">
+                    <button
+                      onClick={() => setMyClanActiveTab("players")}
+                      className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer border-none outline-none flex items-center gap-1.5 ${
+                        myClanActiveTab === "players"
+                          ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                          : "text-gray-400 hover:text-white bg-transparent"
+                      }`}
+                    >
+                      👤 Игроки
+                    </button>
+                    <button
+                      onClick={() => setMyClanActiveTab("vault")}
+                      className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer border-none outline-none flex items-center gap-1.5 ${
+                        myClanActiveTab === "vault"
+                          ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+                          : "text-gray-400 hover:text-white bg-transparent"
+                      }`}
+                    >
+                      📦 Предметы
+                    </button>
+                  </div>
+
+                  {/* Tab Contents: Players List */}
+                  {myClanActiveTab === "players" && (
+                    <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto pr-1 animate-fade-in">
+                      {isLoadingMyClanMembers ? (
+                        <div className="text-xs text-gray-500 text-center py-4 animate-pulse uppercase tracking-wider font-bold">
+                          Загрузка состава клана...
+                        </div>
+                      ) : myFullClanMembers.length === 0 ? (
+                        <div className="text-xs text-gray-400 text-center py-4">
+                          Здесь пока пусто.
+                        </div>
+                      ) : (
+                        [...myFullClanMembers].sort((a, b) => (b.coins || b.clicks || 0) - (a.coins || a.clicks || 0)).map(m => (
+                          <div key={m.id} className="flex justify-between items-center bg-black/25 rounded-xl p-3 hover:bg-black/40 border border-white/5 transition-colors">
+                            <span className="text-xs font-bold font-sans text-gray-200 flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                              {m.playerName || m.displayName || m.name || "Игрок"}
+                              {m.id === effectivePlayerId ? <span className="ml-1 px-1.5 py-0.5 text-[8px] bg-emerald-600/30 text-emerald-400 rounded-md uppercase font-extrabold">Вы</span> : null}
+                            </span>
+                            <span className="text-xs font-mono font-bold text-[#f1c40f]">{Math.floor(m.coins || 0).toLocaleString()} 💰</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tab Contents: Vault items & personal inventory deposit */}
+                  {myClanActiveTab === "vault" && (
+                    <div className="flex flex-col gap-3 animate-fade-in">
+                      {/* --- ОБЩИЙ СЕЙФ КЛАНА --- */}
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest flex items-center gap-1">
+                            👜 ОБЩИЙ СЕЙФ:
+                          </span>
+                          <span className="text-[10px] bg-amber-500/10 text-amber-300 font-mono font-bold px-1.5 py-0.5 rounded border border-amber-500/20">
+                            {clanVaultItems.length} предметов
+                          </span>
+                        </div>
+
+                        {/* Grid layout of vault items styled exactly like the sketch cards */}
+                        {isLoadingClanVault ? (
+                          <div className="text-[11px] text-gray-500 text-center py-8 animate-pulse uppercase tracking-wider font-bold">
+                            Синхронизация с сейфом...
+                          </div>
+                        ) : clanVaultItems.length === 0 ? (
+                          <div className="text-[11px] text-gray-500 text-center py-6 bg-slate-950/45 border border-slate-900 rounded-xl px-4 leading-relaxed font-sans">
+                            🛡️ Сейф пуст. Положите сюда ценные вещи из инвентаря, чтобы ими могли пользоваться коллеги по клану!
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[220px] overflow-y-auto pr-1">
+                            {clanVaultItems.map((item, idx) => (
+                              <div 
+                                key={item.id || idx} 
+                                className="bg-slate-950/40 border border-white/5 hover:border-amber-500/20 rounded-xl p-3 flex flex-col justify-between gap-2.5 transition-all relative overflow-hidden"
+                              >
+                                <div className="absolute top-0 right-0 w-8 h-8 bg-amber-500/5 rounded-full blur-sm -mr-3 -mt-3"></div>
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-xs font-black text-amber-100 truncate line-clamp-1">{item.name || item.title || "Предмет"}</span>
+                                  <span className="text-[9px] text-[#ffbc6e] font-mono tracking-wider mt-1 font-bold">
+                                    {item.productionRate ? `+${item.productionRate} 💰/сек` : ""} {item.multiplier ? `x${item.multiplier} Буст` : ""}
+                                  </span>
+                                  {item.depositedBy && (
+                                    <span className="text-[8px] text-gray-400 mt-1 font-sans truncate leading-none block">
+                                      👤 {item.depositedBy}
+                                    </span>
+                                  )}
+                                </div>
+                                
+                                <button
+                                  onClick={() => handleWithdrawFromVault(item)}
+                                  className="w-full py-1 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 rounded-lg font-black text-[10px] transition-all cursor-pointer shadow-sm border-none outline-none text-center"
+                                >
+                                  Взять 📥
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Deposit panel */}
+                      <div className="pt-2.5 border-t border-white/5 flex flex-col gap-2">
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">
+                          🎒 ПОЛОЖИТЬ В СЕЙФ:
+                        </span>
+                        
+                        <div className="bg-slate-950/20 border border-white/5 rounded-xl p-2 max-h-[140px] overflow-y-auto">
+                          {levelItems.length === 0 ? (
+                            <div className="text-[10px] text-gray-500 text-center py-4 font-sans">
+                              Ваш личный инвентарь пуст. Купите вещи в Магазине!
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 gap-1.5">
+                              {levelItems.map((item) => (
+                                <div key={item.id} className="bg-black/35 rounded-lg p-2.5 flex justify-between items-center gap-3 border border-white/5 hover:border-indigo-500/15 transition-colors">
+                                  <div className="flex flex-col truncate">
+                                    <span className="text-xs font-bold text-gray-300 truncate">{item.name || item.title}</span>
+                                    <span className="text-[9px] text-emerald-400 font-mono font-bold mt-0.5">
+                                      {item.productionRate ? `+${item.productionRate} 💰/сек` : ""} {item.multiplier ? `x${item.multiplier} Буст` : ""}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleDepositToVault(item)}
+                                    className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-lg text-[9px] font-bold transition-all cursor-pointer shadow outline-none border-none shrink-0"
+                                  >
+                                    Положить 📤
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Clans listed dynamically from clansPrivacy to fully support offline search */}
               <div className="flex flex-col gap-3">
-                {Object.keys(clansMap).length === 0 ? (
+                {clansPrivacy.length === 0 ? (
                   <div className="text-center text-gray-500 my-8 py-4 text-xs font-medium">
                     Пока никто не основал ни одного клана. Станьте первыми!
                   </div>
-                ) : (
-                  Object.keys(clansMap)
-                    .filter(name => name.toLowerCase().includes(clanSearchQuery.toLowerCase()))
-                    .map((clanName) => {
-                      const members = clansMap[clanName];
-                      const hasMeJoined = playerClan === clanName;
-                      const isPrivCl = clansPrivacy.find(c => c.name === clanName)?.isPrivate;
-                      return (
-                        <div key={clanName} className="border border-slate-800 bg-slate-900 rounded-2xl p-4 flex flex-col gap-3 shadow-md border-t-2 border-[#e67e22]/40">
-                          <div className="flex justify-between items-center">
-                            <span className="text-[#ffd966] font-black text-sm flex items-center gap-1.5">
-                              🏰 {clanName} {isPrivCl ? "🔒" : "🌐"}
+                ) : (() => {
+                  const filteredClans = clansPrivacy.filter(
+                    c => c.name.toLowerCase().includes(clanSearchQuery.toLowerCase()) && c.name !== playerClan
+                  );
+                  if (filteredClans.length === 0) {
+                    return (
+                      <div className="text-gray-500 text-center py-10 text-xs text-amber-400 font-bold border border-white/5 bg-slate-950/20 rounded-2xl p-6">
+                        🔍 Кланы по запросу "{clanSearchQuery}" не найдены.
+                      </div>
+                    );
+                  }
+                  return filteredClans.map((clan) => {
+                    const clanName = clan.name;
+                    const isPrivCl = clan.isPrivate;
+                    const members = onlinePlayers.filter(p => p.clan === clanName);
+                    const hasMeJoined = playerClan === clanName;
+                    return (
+                      <div key={clanName} className="border border-slate-800 bg-slate-900 rounded-2xl p-4 flex flex-col gap-3 shadow-md border-t-2 border-[#e67e22]/40">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[#ffd966] font-black text-sm flex items-center gap-1.5">
+                            🏰 {clanName} {isPrivCl ? "🔒" : "🌐"}
+                          </span>
+                          {hasMeJoined && (
+                            <span className="text-[9px] bg-emerald-600 text-white px-2.5 py-0.5 rounded-full font-bold shadow-inner">
+                              Мой Клан
                             </span>
-                            {hasMeJoined && (
-                              <span className="text-[9px] bg-emerald-600 text-white px-2.5 py-0.5 rounded-full font-bold shadow-inner">
-                                Мой Клан
-                              </span>
-                            )}
-                          </div>
+                          )}
+                        </div>
 
-                          <div className="flex flex-col gap-1.5 border-t border-white/5 pt-2 text-xs">
-                            {members.map((m) => (
+                        <div className="flex flex-col gap-1.5 border-t border-white/5 pt-2 text-xs">
+                          {members.length === 0 ? (
+                            <span className="text-[#aab3c4]/65 text-[10px] italic py-1 font-sans">В сети нет участников</span>
+                          ) : (
+                            members.map((m) => (
                               <div key={m.id} className="flex justify-between items-center text-gray-300 py-1 font-mono text-[11px]">
                                 <span className="font-sans font-bold flex items-center gap-1">👤 {m.name} {m.id === effectivePlayerId ? "(Вы)" : ""}</span>
                                 <span className="text-[#ffbc6e] font-semibold">{Math.floor(m.coins).toLocaleString()} 💰</span>
                               </div>
-                            ))}
-                          </div>
-
-                          <div className="pt-2 border-t border-white/5">
-                            {!hasMeJoined ? (
-                              <button 
-                                onClick={() => handleJoinClan(clanName)}
-                                className="w-full py-2.5 bg-[#27ae60] hover:bg-[#219653] text-[11px] font-black tracking-wider text-white rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1 border-none"
-                              >
-                                ВСТУПИТЬ В КЛАН {isPrivCl ? "🔒" : "⚔️"}
-                              </button>
-                            ) : (
-                              <button 
-                                onClick={handleLeaveClan}
-                                className="w-full py-2.5 bg-red-650/25 border border-red-500/25 hover:bg-red-650 text-[11px] font-black text-rose-305 rounded-xl cursor-pointer transition-colors border-none"
-                              >
-                                ПОКИНУТЬ КЛАН ✕
-                              </button>
-                            )}
-                          </div>
+                            ))
+                          )}
                         </div>
-                      );
-                    })
-                )}
+
+                        <div className="pt-2 border-t border-white/5">
+                          {!hasMeJoined ? (
+                            <button 
+                              onClick={() => handleJoinClan(clanName)}
+                              className="w-full py-2.5 bg-[#27ae60] hover:bg-[#219653] text-[11px] font-black tracking-wider text-white rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1 border-none"
+                            >
+                              ВСТУПИТЬ В КЛАН {isPrivCl ? "🔒" : "⚔️"}
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={handleLeaveClan}
+                              className="w-full py-2.5 bg-red-650/25 border border-red-500/25 hover:bg-red-650 text-[11px] font-black text-rose-303 rounded-xl cursor-pointer transition-colors border-none"
+                            >
+                              ПОКИНУТЬ КЛАН ✕
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           )}
@@ -3698,18 +4888,18 @@ export default function App() {
                   </div>
 
                   {/* Message Input Form */}
-                  <form onSubmit={sendDirectMessage} className="pt-2.5 border-t border-white/5 flex gap-1.5 mt-2">
+                  <form onSubmit={sendDirectMessage} className="pt-2.5 border-t border-white/5 flex items-center gap-1.5 mt-2">
                     <input 
                       type="text" 
                       value={friendChatMessageText}
                       onChange={(e) => setFriendChatMessageText(e.target.value)}
                       maxLength={150}
                       placeholder="Напишите сообщение..."
-                      className="flex-1 px-3 py-2 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
+                      className="flex-1 h-10 px-3 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
                     />
                     <button 
                       type="submit" 
-                      className="w-10 h-10 flex items-center justify-center rounded-xl bg-amber-600 hover:bg-amber-500 shadow-md cursor-pointer transition-colors border-none"
+                      className="w-10 h-10 flex items-center justify-center rounded-xl bg-amber-600 hover:bg-amber-500 shadow-md cursor-pointer transition-colors border-none shrink-0"
                     >
                       <Send className="w-4 h-4 text-white" />
                     </button>
@@ -4252,7 +5442,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-2 mt-0.5">
 
                 <button 
-                  onClick={currentUser.email?.startsWith("tg_") ? handleTelegramSignOut : handleGoogleSignOut}
+                  onClick={currentUser.email?.startsWith("tg_") ? handleTelegramSignOut : (currentUser.email?.startsWith("vk_") ? handleVKSignOut : handleGoogleSignOut)}
                   className="py-2.5 px-3 bg-slate-800 hover:bg-slate-755 transition-colors text-[10px] font-black rounded-lg cursor-pointer text-rose-300 border-none outline-none flex items-center justify-center h-full"
                 >
                   Выйти
@@ -4347,7 +5537,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-6 gap-1 bg-black/25 p-1.5 rounded-xl border border-white/5 max-h-[75px] overflow-y-auto scrollbar-thin">
+                <div className="flex gap-2 bg-black/25 p-2 rounded-xl border border-white/5 overflow-x-auto scrollbar-none scroll-smooth snap-x">
                   {AVATAR_PRESETS.map((av) => (
                     <button
                       key={av.name}
@@ -4356,7 +5546,7 @@ export default function App() {
                         setPlayerPhotoURL(av.url);
                         addToast(`🎨 Выбран аватар: ${av.name}`);
                       }}
-                      className={`aspect-square rounded-lg overflow-hidden border-2 transition-all p-0.5 ${
+                      className={`w-12 h-12 shrink-0 snap-center rounded-lg overflow-hidden border-2 transition-all p-0.5 outline-none ${
                         playerPhotoURL === av.url ? "border-amber-400 bg-amber-950/40 scale-95" : "border-transparent bg-slate-950/60 hover:bg-slate-900"
                       }`}
                       title={av.name}
@@ -4388,21 +5578,119 @@ export default function App() {
 
               <hr className="border-white/5 mt-3" />
 
-              {/* Toggle sound effects feedback */}
-              <div className="flex items-center justify-between py-1 text-sm font-semibold">
-                <span className="text-gray-300 text-xs">Звуковые эффекты клика:</span>
-                <button 
-                  type="button"
-                  onClick={() => setSoundEnabled(prev => !prev)}
-                  className={`p-2 rounded-xl flex items-center justify-center gap-1 cursor-pointer font-bold border ${
-                    soundEnabled 
-                      ? "bg-slate-800 border-emerald-500/20 text-emerald-400" 
-                      : "bg-slate-900 border-red-500/20 text-red-400"
-                  }`}
-                >
-                  {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                  <span className="text-xs">{soundEnabled ? "Вкл" : "Выкл"}</span>
-                </button>
+              {/* --- CHAT & GAME SOUND SETTINGS --- */}
+              <div className="flex flex-col gap-3 bg-black/20 p-3 rounded-xl border border-white/5">
+                <span className="text-[10px] text-[#ffbc6e] font-black uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                  🎵 Настройки звуков и эффектов
+                </span>
+
+                {/* Main sound toggle */}
+                <div className="flex items-center justify-between py-1 text-sm font-semibold">
+                  <span className="text-gray-300 text-xs">Общие звуковые эффекты:</span>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setSoundEnabled(prev => !prev);
+                      addToast(!soundEnabled ? "🔊 Звуки включены!" : "🔇 Звуки отключены");
+                    }}
+                    className={`p-2 rounded-xl flex items-center justify-center gap-1 cursor-pointer font-bold border transition-all ${
+                      soundEnabled 
+                        ? "bg-slate-800 border-emerald-500/20 text-emerald-400" 
+                        : "bg-slate-900 border-red-500/20 text-red-400"
+                    }`}
+                  >
+                    {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                    <span className="text-xs">{soundEnabled ? "Вкл" : "Выкл"}</span>
+                  </button>
+                </div>
+
+                <div className="border-t border-white/5 pt-2 flex flex-col gap-2">
+                  {/* Sent Message Sound Selector */}
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold text-gray-400">Звук отправки сообщения:</span>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {[
+                        { id: "iphone-sent-message", name: "iPhone Sent Sound 📤" },
+                        { id: "iphone-message-swoosh", name: "iPhone Swoosh 💨" },
+                        { id: "triangle-synth", name: "Синтезатор (Ретро) 👾" }
+                      ].map((snd) => (
+                        <div 
+                          key={snd.id} 
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                            sentSoundKey === snd.id 
+                              ? "bg-amber-500/10 border-amber-500/40 text-amber-300 font-extrabold" 
+                              : "bg-slate-950/45 border-slate-800/40 text-gray-400 hover:text-white"
+                          }`}
+                        >
+                          <label className="flex items-center gap-2 cursor-pointer flex-1 py-0.5">
+                            <input 
+                              type="radio" 
+                              name="sentSoundGroup"
+                              checked={sentSoundKey === snd.id}
+                              onChange={() => {
+                                setSentSoundKey(snd.id);
+                                playSentSound(snd.id, true);
+                              }}
+                              className="accent-amber-500 cursor-pointer"
+                            />
+                            <span>{snd.name}</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => playSentSound(snd.id, true)}
+                            className="p-1 rounded bg-white/5 hover:bg-white/10 text-white cursor-pointer transition-colors border-none"
+                            title="Прослушать"
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Received Message Sound Selector */}
+                  <div className="flex flex-col gap-1 mt-1">
+                    <span className="text-[10px] font-bold text-gray-400">Звук получения / уведомления:</span>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {[
+                        { id: "iphone-sound-message", name: "iPhone Message Sound 🔔" },
+                        { id: "sine-synth", name: "Синтезатор (Классический) 🎹" },
+                        { id: "cyber-beep", name: "Кибер-сигнал ⚡" }
+                      ].map((snd) => (
+                        <div 
+                          key={snd.id} 
+                          className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                            receivedSoundKey === snd.id 
+                              ? "bg-amber-500/10 border-amber-500/40 text-amber-300 font-extrabold" 
+                              : "bg-slate-950/45 border-slate-800/40 text-gray-400 hover:text-white"
+                          }`}
+                        >
+                          <label className="flex items-center gap-2 cursor-pointer flex-1 py-0.5">
+                            <input 
+                              type="radio" 
+                              name="receivedSoundGroup"
+                              checked={receivedSoundKey === snd.id}
+                              onChange={() => {
+                                setReceivedSoundKey(snd.id);
+                                playNotificationSound(snd.id, true);
+                              }}
+                              className="accent-amber-500 cursor-pointer"
+                            />
+                            <span>{snd.name}</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => playNotificationSound(snd.id, true)}
+                            className="p-1 rounded bg-white/5 hover:bg-white/10 text-white cursor-pointer transition-colors border-none"
+                            title="Прослушать"
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <hr className="border-white/5 mt-1" />
@@ -4477,12 +5765,12 @@ export default function App() {
 
             </div>
           ) : (
-            // --- UNAUTHENTICATED STATE ---
+            // --- UNAUTHENTICATED STATE IN SETTINGS ---
             <div className="flex flex-col gap-3">
               <p className="text-[10px] text-gray-400 leading-normal font-semibold">
                 Войдите через Google или Telegram, чтобы привязать прогресс и сохранить ваши монеты!
               </p>
-              <div className="flex gap-3 justify-center items-center mt-1 w-full">
+              <div className="flex gap-2 justify-center items-center mt-1 w-full">
                 <button 
                   onClick={handleTelegramAuth} 
                   className="flex-1 py-3 bg-[#2481cc] hover:bg-[#1a6ea8] active:scale-95 text-white rounded-xl flex items-center justify-center transition-all shadow-md gap-2 border-none outline-none cursor-pointer text-xs font-bold"
@@ -4491,7 +5779,17 @@ export default function App() {
                   <svg viewBox="0 0 24 24" className="w-4 h-4 flex-shrink-0" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.05-.21.05-.39-.14-.39-.14 0-.3.08-.47.19a322.9 322.9 0 0 1-5.18 3.51c-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.37.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
                   </svg>
-                  Telegram
+                  TG
+                </button>
+                <button 
+                  onClick={handleVKAuth} 
+                  className="flex-1 py-3 bg-[#0077ff] hover:bg-[#0066ee] active:scale-95 text-white rounded-xl flex items-center justify-center transition-all shadow-md gap-2 border-none outline-none cursor-pointer text-xs font-bold"
+                  title="Войти через VK"
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4 flex-shrink-0" fill="currentColor">
+                    <path d="M6.79 7.3H4.05c.13 6.24 3.25 9.99 8.72 9.99h.31v-3.57c2.01.2 3.53 1.67 4.14 3.57h2.84c-.78-2.84-2.83-4.41-4.11-5.01 1.28-.74 3.08-2.54 3.51-4.98h-2.58c-.56 1.98-2.22 3.78-3.8 3.95V7.3H10.5v6.92c-1.6-.4-3.62-2.34-3.71-6.92Z"/>
+                  </svg>
+                  VK
                 </button>
                 <button 
                   onClick={handleGoogleSignIn} 
@@ -4543,13 +5841,44 @@ export default function App() {
           </button>
         </div>
 
+        {/* VK Cloud Storage Integration Panel */}
+        {currentUser?.email?.startsWith("vk_") && (
+          <div className="flex flex-col gap-3 bg-[#0077ff]/10 p-4 rounded-2xl border border-[#0077ff]/20 animate-fade-in shadow-inner">
+            <span className="text-[10px] text-sky-400 font-black uppercase tracking-wider flex items-center gap-1.5 font-mono">
+              🌐 VK ОБЛАКО СИНХРОНИЗАЦИЯ
+            </span>
+            <p className="text-[10px] text-sky-250 leading-normal font-semibold">
+              Ваш игровой прогресс автоматически дублируется во встроенное облачное хранилище VK Cloud Storage для 100% защиты ваших данных.
+            </p>
+            <button 
+              type="button"
+              onClick={async () => {
+                try {
+                  await syncWithVKCloud();
+                  addToast("☁️ Резервная копия успешно создана в Облаке VK!");
+                } catch(e) {
+                  addToast("❌ Ошибка синхронизации с VK Облаком");
+                }
+              }}
+              className="w-full py-3 bg-[#0077ff] hover:bg-[#0066ee] text-white font-black rounded-xl text-[11px] uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-[0.98] outline-none border-none cursor-pointer"
+            >
+              🔄 Синхронизировать с Облаком VK
+            </button>
+          </div>
+        )}
+
+        {/* Dynamic Admin Panel Trigger Entry */}
+        <div className="flex justify-center mt-2">
+          <button 
+            type="button"
+            onClick={() => setIsAdminLoginModalOpen(true)}
+            className="text-[9px] text-gray-700 hover:text-amber-500 transition-colors uppercase tracking-[0.3em] font-black cursor-pointer border-none bg-transparent"
+          >
+            ⚙️ Войти в Панель Админа
+          </button>
+        </div>
+
       </div>
-
-
-
-
-
-
     );
   };
 
@@ -4560,8 +5889,44 @@ export default function App() {
 
   if (isAuthLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#060914] text-white font-bold font-mono text-sm tracking-widest animate-pulse">
-        ЗАГРУЗКА...
+      <div 
+        className="min-h-[100dvh] w-screen flex flex-col items-center justify-center text-white p-6 font-sans relative overflow-hidden"
+        style={{
+          background: "radial-gradient(circle at center, #111a30 0%, #060914 100%)",
+        }}
+      >
+        {/* Glow ambient effects */}
+        <div className="absolute top-[-20%] right-[-10%] w-[500px] h-[500px] bg-amber-500/5 rounded-full blur-[120px] animate-pulse"></div>
+        <div className="absolute bottom-[-20%] left-[-10%] w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2.5s' }}></div>
+
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col items-center gap-6 relative z-10 max-w-sm text-center"
+        >
+          {/* Animated Loader Graphic */}
+          <div className="relative w-24 h-24 flex items-center justify-center mb-2">
+            <div className="absolute inset-0 rounded-3xl bg-gradient-to-tr from-amber-500 to-amber-300 animate-spin opacity-20 blur-sm [animation-duration:3s]"></div>
+            <div className="absolute inset-1.5 rounded-2xl border-2 border-dashed border-amber-500/40 animate-spin [animation-duration:12s]"></div>
+            <div className="text-3xl">⚔️</div>
+          </div>
+
+          <div className="flex flex-col items-center gap-2">
+            <h1 className="text-2xl font-black uppercase text-amber-500 tracking-tight">Клик Клан</h1>
+            <p className="text-[10px] text-amber-400 font-mono tracking-[0.25em] uppercase font-bold animate-pulse">
+              {vkInitStatus === "initializing" ? "Авторизация через VK..." : "Проверка авторизации..."}
+            </p>
+          </div>
+
+          <div className="w-40 h-1 bg-white/5 rounded-full overflow-hidden mt-2 border border-white/[0.02] relative">
+            <motion.div 
+              className="absolute left-0 top-0 bottom-0 bg-gradient-to-r from-amber-500 to-yellow-400 rounded-full"
+              initial={{ width: "10%" }}
+              animate={{ width: "90%" }}
+              transition={{ repeat: Infinity, repeatType: "reverse", duration: 1.5, ease: "easeInOut" }}
+            />
+          </div>
+        </motion.div>
       </div>
     );
   }
@@ -4569,92 +5934,145 @@ export default function App() {
   if (!currentUser) {
     return (
       <>
-        <div className="min-h-screen flex items-center justify-center bg-[#060914] text-white p-4">
-          <div className="flex flex-col gap-6 items-center p-8 bg-slate-900/50 rounded-3xl border border-white/5 shadow-2xl max-w-sm w-full backdrop-blur-sm">
-            <img 
-              src="/images/app_icon.jpg" 
-              alt="Клик Клан" 
-              className="w-24 h-24 rounded-3xl shadow-[0_0_25px_rgba(242,156,18,0.2)] border border-amber-500/20"
-            />
-            <h2 className="text-xl font-black text-center text-amber-500">Клик Клан</h2>
-            <p className="text-sm text-gray-400 text-center font-medium">Войдите в аккаунт, чтобы продолжить игру!</p>
-            <div className="flex flex-col gap-2 w-full mt-2">
-              <input 
-                type="text" 
-                value={telegramCode}
-                onChange={(e) => setTelegramCode(e.target.value.toUpperCase())}
-                placeholder="Введите код из бота..."
-                className="w-full py-3 px-4 bg-slate-950 text-white rounded-xl text-sm border border-slate-700 outline-none focus:border-[#2481cc]"
-              />
+        <div className="min-h-[100dvh] w-screen flex items-center justify-center bg-[#060914] text-white p-4 font-sans relative overflow-hidden">
+          {/* Ambient Background */}
+          <div className="absolute top-[-10%] right-[-5%] w-[400px] h-[400px] bg-amber-500/5 rounded-full blur-[100px] animate-pulse"></div>
+          <div className="absolute bottom-[-10%] left-[-5%] w-[400px] h-[400px] bg-emerald-500/5 rounded-full blur-[100px] animate-pulse" style={{ animationDelay: '2s' }}></div>
+
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="flex flex-col gap-8 items-center p-8 bg-[#0a0f1e] rounded-[32px] border border-white/5 shadow-2xl max-w-sm w-full relative z-10"
+          >
+            <div className="flex flex-col items-center gap-3 w-full relative">
+              <h2 className="text-3xl font-black text-amber-500 tracking-tight">Клик Клан</h2>
+              <p className="text-[13px] text-gray-400 font-medium text-center px-4 leading-tight">Войдите в аккаунт, чтобы продолжить игру!</p>
+            </div>
+
+            <div className="flex flex-col gap-4 w-full">
+              <div className="relative">
+                <input 
+                  type="text" 
+                  value={telegramCode}
+                  onChange={(e) => setTelegramCode(e.target.value.toUpperCase())}
+                  placeholder="Введите код из бота..."
+                  className="w-full py-4 px-6 bg-black/40 text-white rounded-2xl text-sm font-bold border border-white/10 outline-none focus:border-amber-500/50 transition-all placeholder:text-gray-600"
+                />
+              </div>
+              
               <button 
                 onClick={handleTelegramCodeLogin} 
                 disabled={isTelegramLoggingIn}
-                className="w-full py-3 bg-[#2ecc71] hover:bg-[#27ae60] text-white rounded-xl text-sm font-bold transition-colors outline-none cursor-pointer border-none disabled:opacity-50"
+                className="w-full py-4 bg-[#2ecc71] hover:bg-[#27ae60] active:scale-[0.98] text-white rounded-2xl text-sm font-black transition-all shadow-lg disabled:opacity-50 cursor-pointer border-none"
               >
                 {isTelegramLoggingIn ? "Вход..." : "Подтвердить код"}
               </button>
-            </div>
-            <div className="w-full flex flex-col gap-4 mt-2 border-t border-white/5 pt-4">
-              <button 
-                type="button"
-                onClick={() => setIsAccountSelectorOpen(true)}
-                className="w-full py-3.5 bg-slate-800 hover:bg-slate-755 text-gray-200 hover:text-white rounded-xl text-xs font-black transition-all border border-white/5 active:scale-98 flex items-center justify-center gap-2.5 cursor-pointer shadow-md"
-              >
-                <Users className="w-4 h-4 text-amber-500" />
-                Выбрать сохраненный аккаунт
-              </button>
 
-              <div className="flex flex-col gap-2.5 items-center w-full mt-1">
-                <span className="text-[10px] text-gray-500 font-bold tracking-wider font-mono uppercase">Или в один клик через</span>
-                <div className="flex gap-4 justify-center items-center">
-                  <button 
-                    onClick={handleTelegramAuth} 
-                    className="w-12 h-12 bg-[#2481cc] hover:bg-[#1a6ea8] active:scale-95 text-white rounded-xl flex items-center justify-center transition-all shadow-md hover:shadow-lg hover:shadow-[#2481cc]/20 border-none outline-none cursor-pointer"
-                    title="Войти через Telegram"
-                  >
-                    <svg viewBox="0 0 24 24" className="w-6 h-6 flex-shrink-0" fill="currentColor">
-                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.05-.21.05-.39-.14-.39-.14 0-.3.08-.47.19a322.9 322.9 0 0 1-5.18 3.51c-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.37.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-                    </svg>
-                  </button>
-                  <button 
-                    onClick={handleGoogleSignIn} 
-                    className="w-12 h-12 bg-white hover:bg-gray-100 active:scale-95 text-[#1a1f2c] rounded-xl flex items-center justify-center transition-all shadow-md border-none outline-none cursor-pointer"
-                    title="Войти через Google"
-                  >
-                    <svg viewBox="0 0 24 24" className="w-6 h-6 flex-shrink-0">
-                      <path
-                        fill="#4285F4"
-                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31l3.57 2.77c2.08-1.92 3.28-4.74 3.28-8.09z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18c-.75 1.49-1.18 3.16-1.18 4.94s.43 3.45 1.18 4.94l3.66-2.85z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                      />
-                    </svg>
-                  </button>
-                </div>
+              <div className="grid grid-cols-1 gap-3 w-full">
+                <button 
+                  type="button"
+                  onClick={() => setIsAccountSelectorOpen(true)}
+                  className="w-full py-4 bg-[#1e293b] hover:bg-[#334155] text-white rounded-2xl text-xs font-black transition-all border border-white/5 active:scale-98 flex items-center justify-center gap-3 cursor-pointer shadow-md outline-none"
+                >
+                  <Users className="w-4 h-4 text-amber-500" />
+                  Выбрать сохраненный аккаунт
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => window.open(window.location.href, '_blank')}
+                  className="w-full py-4 bg-slate-800/40 hover:bg-slate-800/60 text-gray-300 rounded-2xl text-[10px] font-black transition-all border border-white/5 active:scale-95 uppercase tracking-widest cursor-pointer outline-none flex items-center justify-center gap-3"
+                >
+                  <ExternalLink className="w-4 h-4 text-blue-500" />
+                  Открыть в новой вкладке
+                </button>
               </div>
-
-              {/* Borderless Admin Login Button inside the login card */}
-              <button 
-                type="button"
-                onClick={() => setIsAdminLoginModalOpen(true)}
-                className="mt-2 text-[10px] text-gray-500 hover:text-amber-500 uppercase tracking-widest font-black bg-transparent border-none outline-none cursor-pointer transition-colors"
-              >
-                Вход для администраторов
-              </button>
             </div>
-          </div>
+
+            <div className="flex flex-col gap-5 items-center w-full">
+              <div className="flex items-center gap-4 w-full">
+                <div className="flex-1 h-[1px] bg-white/5"></div>
+                <span className="text-[9px] text-gray-600 font-black tracking-[0.2em] uppercase">или в один клик через</span>
+                <div className="flex-1 h-[1px] bg-white/5"></div>
+              </div>
+              
+              <div className="flex gap-5 justify-center items-center">
+                <button 
+                  onClick={handleTelegramAuth} 
+                  className="w-14 h-14 bg-[#2481cc] hover:bg-[#1a6ea8] active:scale-90 text-white rounded-2xl flex items-center justify-center transition-all shadow-md cursor-pointer border-none outline-none"
+                  title="Войти через Telegram"
+                >
+                  <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.05-.21.05-.39-.14-.39-.14 0-.3.08-.47.19a322.9 322.9 0 0 1-5.18 3.51c-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.37.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                  </svg>
+                </button>
+                <button 
+                  onClick={handleVKAuth} 
+                  className="w-14 h-14 bg-[#0077ff] hover:bg-[#0066ee] active:scale-90 text-white rounded-2xl flex items-center justify-center transition-all shadow-md cursor-pointer border-none outline-none"
+                  title="Войти через VK"
+                >
+                  <svg viewBox="0 0 24 24" className="w-8 h-8" fill="currentColor">
+                    <path d="M6.79 7.3H4.05c.13 6.24 3.25 9.99 8.72 9.99h.31v-3.57c2.01.2 3.53 1.67 4.14 3.57h2.84c-.78-2.84-2.83-4.41-4.11-5.01 1.28-.74 3.08-2.54 3.51-4.98h-2.58c-.56 1.98-2.22 3.78-3.8 3.95V7.3H10.5v6.92c-1.6-.4-3.62-2.34-3.71-6.92Z"/>
+                  </svg>
+                </button>
+                <button 
+                  onClick={handleGoogleSignIn} 
+                  className="w-14 h-14 bg-white hover:bg-gray-100 active:scale-90 text-black rounded-2xl flex items-center justify-center transition-all shadow-md cursor-pointer border-none outline-none"
+                  title="Войти через Google"
+                >
+                  <svg viewBox="0 0 24 24" className="w-7 h-7">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31l3.57 2.77c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18c-.75 1.49-1.18 3.16-1.18 4.94s.43 3.45 1.18 4.94l3.66-2.85z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 w-full mt-4 border-t border-white/5 pt-6">
+              <span className="text-[10px] text-gray-500 font-black uppercase tracking-widest text-center mb-1">Выберите версию для входа</span>
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => {
+                    setAppVersion("pc");
+                    localStorage.setItem("appVersion", "pc");
+                  }}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black uppercase transition-all border cursor-pointer ${
+                    appVersion === "pc" 
+                      ? "bg-amber-500 text-black border-amber-500" 
+                      : "bg-white/5 text-gray-400 border-white/5 hover:bg-white/10"
+                  }`}
+                >
+                  <Monitor className="w-3 h-3" /> PC
+                </button>
+                <button 
+                  onClick={() => {
+                    setAppVersion("mobile");
+                    localStorage.setItem("appVersion", "mobile");
+                  }}
+                  className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black uppercase transition-all border cursor-pointer ${
+                    appVersion === "mobile" 
+                      ? "bg-amber-500 text-black border-amber-500" 
+                      : "bg-white/5 text-gray-400 border-white/5 hover:bg-white/10"
+                  }`}
+                >
+                  <Smartphone className="w-3 h-3" /> MOBILE
+                </button>
+              </div>
+            </div>
+
+            <button 
+              type="button"
+              onClick={() => setIsAdminLoginModalOpen(true)}
+              className="text-[9px] text-gray-700 hover:text-amber-500 transition-colors uppercase tracking-[0.3em] font-black cursor-pointer border-none bg-transparent mt-2"
+            >
+              Admin Panel
+            </button>
+          </motion.div>
         </div>
 
+        {/* --- DYNAMIC MODALS AND CONSOLES AT AUTH ZONE --- */}
         {isAdminLoginModalOpen && (
           <div className="fixed inset-0 bg-black/92 flex items-center justify-center p-4 z-[5000] backdrop-blur-md">
             <motion.div 
@@ -4704,7 +6122,6 @@ export default function App() {
           <AdminConsole onClose={() => setIsAdminConsoleOpen(false)} addToast={addToast} />
         )}
 
-        {/* Account Selector Modal */}
         {isAccountSelectorOpen && (
           <div className="fixed inset-0 bg-black/92 flex items-center justify-center p-4 z-[4500] backdrop-blur-md">
             <motion.div 
@@ -4765,9 +6182,9 @@ export default function App() {
                               </div>
                             )}
                             <span className={`absolute -bottom-1 -right-1 text-[8px] font-black px-1 rounded-md text-white font-mono uppercase border border-[#162239] ${
-                              account.type === "telegram" ? "bg-[#2481cc]" : "bg-[#ea4335]"
+                              account.type === "telegram" ? "bg-[#2481cc]" : (account.type === "vk" ? "bg-[#0077ff]" : "bg-[#ea4335]")
                             }`}>
-                              {account.type === "telegram" ? "TG" : "G"}
+                              {account.type === "telegram" ? "TG" : (account.type === "vk" ? "VK" : "G")}
                             </span>
                           </div>
 
@@ -4826,10 +6243,262 @@ export default function App() {
     );
   }
 
+  // --- SUB-REPRESENTATIONS FOR AUTOPINNING NAVIGATION/LAYOUTS ---
+  const profileSection = (
+    <div className="flex justify-between items-center bg-black/30 rounded-[20px] p-3 text-sm border border-white/5 shrink-0 select-none">
+      <div className="flex items-center gap-2.5">
+        <div className="w-10 h-10 rounded-full overflow-hidden border border-amber-400/40 bg-slate-950 flex shadow-inner shrink-0">
+          <img 
+            src={playerPhotoURL} 
+            className="w-full h-full object-cover" 
+            onError={(e) => { (e.target as HTMLImageElement).src = "https://api.dicebear.com/7.x/pixel-art/svg?seed=Lucky"; }} 
+          />
+        </div>
+        <div className="flex flex-col min-w-0">
+          <span className="text-[#ffd966] font-extrabold text-[15px] flex items-center gap-1.5 leading-none truncate">
+            {playerName}
+          </span>
+          <span className="text-[11px] text-[#9ca7b5] mt-1 font-medium leading-none truncate">
+            {playerClan ? `🏰 [${playerClan}]` : "⚠️ Без клана"}
+          </span>
+        </div>
+      </div>
+      <div className="flex gap-1.5 shrink-0">
+        <button 
+          type="button"
+          className="w-10 h-10 rounded-xl bg-[#2c3e50] hover:bg-[#34495e] transition-colors flex items-center justify-center text-sm font-bold shadow-md cursor-pointer border-none outline-none active:scale-95"
+          onClick={() => setActiveMainTab("settings")}
+          title="Настройки"
+        >
+          <Settings className="w-5 h-5 text-white" />
+        </button>
+      </div>
+    </div>
+  );
+
+  const energySection = (
+    <div className="bg-black/20 rounded-[20px] p-3.5 relative border border-white/5 shrink-0 select-none">
+      <div className="flex justify-between items-center text-xs text-[#bbd9ff] font-semibold mb-2 font-mono">
+        <span>⚡ РЕЗЕРВ ЭНЕРГИИ</span>
+        <span className="text-[#2ecc71]">{regenRate > 0 ? `+${regenRate}/сек` : ""}</span>
+      </div>
+      <div className="w-full bg-[#1e2a3a] rounded-full h-3.5 overflow-hidden p-0.5 relative">
+        <div 
+          className={`h-full rounded-full transition-all duration-300 ${
+            (energy / maxEnergy) < 0.2 
+              ? "bg-gradient-to-r from-red-500 to-red-600 animate-pulse" 
+              : "bg-gradient-to-r from-[#3498db] to-[#2980b9]"
+          }`}
+          style={{ width: `${(energy / maxEnergy) * 100}%` }}
+        ></div>
+      </div>
+      <div className="flex justify-between items-center text-[11px] text-[#ffd966] mt-2 font-mono font-medium">
+        <span>{Math.floor(energy)} / {maxEnergy}</span>
+        <span className="opacity-80 text-[#8fa2be]">Клик: -1 ⚡</span>
+      </div>
+    </div>
+  );
+
+  const scoreSection = (
+    <div className="text-center my-1 shrink-0 select-none">
+      <div className="text-[11px] text-[#7f8c8d] uppercase tracking-wider font-extrabold font-mono">Ваш баланс</div>
+      <div className="text-5xl font-black text-white mt-1 select-none font-mono drop-shadow-[0_4px_12px_rgba(255,255,255,0.1)]">
+        {Math.floor(coins).toLocaleString()}
+      </div>
+    </div>
+  );
+
+  const clickAreaSection = (
+    <div className="flex justify-center my-1 select-none shrink-0">
+      <button 
+        onTouchStart={handleManualClick}
+        onClick={handleManualClick}
+        disabled={energy <= 0}
+        className={`w-[155px] h-[155px] rounded-full flex items-center justify-center relative select-none transition-transform duration-75 outline-none border-none cursor-pointer focus:ring-0 select-none touch-manipulation ${
+          energy <= 0 ? "grayscale opacity-50 cursor-not-allowed scale-95" : "active:scale-95 active:translate-y-1"
+        }`}
+        style={{
+          background: "radial-gradient(circle at 30% 30%, #ffaa44, #d35400)",
+          boxShadow: energy <= 0 ? "none" : "0 8px 0 #a04000, 0 16px 24px rgba(0,0,0,0.45)",
+        }}
+      >
+        <span className="text-6xl select-none pointer-events-none filter drop-shadow-[0_4px_10px_rgba(0,0,0,0.35)]">
+          💎
+        </span>
+      </button>
+    </div>
+  );
+
+  const levelProgressSection = (
+    <div className="bg-black/20 rounded-[20px] p-3.5 relative border border-white/5 select-none text-sm shrink-0">
+      <div className="flex justify-between items-center text-xs text-[#ffd966] font-extrabold mb-1.5 font-mono">
+        <span>⭐ УРОВЕНЬ {lvlInfo.lvl}</span>
+        <span className="text-[#aab3c4] text-[10px] font-bold">({lvlInfo.progressInLvl} / {lvlInfo.neededInLvl} кликов)</span>
+      </div>
+      
+      <div className="w-full bg-[#1e2a3a] rounded-full h-3 overflow-hidden p-[1px] relative">
+        <div 
+          className="h-full rounded-full bg-gradient-to-r from-amber-500 via-amber-400 to-[#e67e22] transition-all duration-300"
+          style={{ width: `${lvlInfo.pct}%` }}
+        ></div>
+      </div>
+      
+      <div className="flex justify-between items-center text-[10px] text-gray-400 font-mono font-medium mt-1.5 leading-none">
+        <span>Прогресс до Уровня {lvlInfo.lvl + 1}</span>
+        <span className="text-amber-400 font-bold">{Math.round(lvlInfo.pct)}%</span>
+      </div>
+    </div>
+  );
+
+  const activeTabContentSection = (
+    <>
+      {activeMainTab === "upgrades" && (
+        <div className={`gap-2.5 ${appVersion === "pc" ? "grid grid-cols-2 lg:grid-cols-3 gap-3 animate-fade-in" : "flex flex-col animate-fade-in"}`}>
+          {/* Click Upgrade Card */}
+          <div className="bg-[#162239] rounded-xl p-2.5 flex justify-between items-center border border-white/5">
+            <div className="flex flex-col min-w-0 pr-1">
+              <span className="text-xs font-black text-[#ffbc6e] flex items-center gap-1 uppercase tracking-wide truncate">👊 Сила клика</span>
+              <span className="text-[10px] text-[#aab7c4] mt-0.5 font-sans">Уровень {clickPowerLevel} (+1 монета/клик)</span>
+            </div>
+            <button 
+              onClick={() => buyUpgrade("click")}
+              disabled={coins < clickUpgradePrice}
+              className={`py-1.5 px-2.5 rounded-lg text-[11px] font-black transition-all shadow border-none outline-none shrink-0 ${
+                coins >= clickUpgradePrice 
+                  ? "bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer" 
+                  : "bg-slate-800 text-gray-500 cursor-not-allowed opacity-50"
+              }`}
+            >
+              {clickUpgradePrice.toLocaleString()} 💰
+            </button>
+          </div>
+
+          {/* Autoclicker Upgrade Card */}
+          <div className="bg-[#162239] rounded-xl p-2.5 flex justify-between items-center border border-white/5">
+            <div className="flex flex-col flex-1 min-w-0 pr-1.5">
+              <span className="text-xs font-black text-[#ffbc6e] flex items-center gap-1 uppercase tracking-wide truncate font-semibold">🤖 Автокликер 24/7</span>
+              <span className="text-[10px] text-[#aab7c4] mt-0.5 truncate select-none leading-normal font-sans">
+                Ур.{autoClickerLevel} (+{Math.ceil(autoClickerLevel * 0.5)} монеты/сек)
+              </span>
+            </div>
+            <button 
+              onClick={() => buyUpgrade("auto")}
+              disabled={coins < autoClickerPrice}
+              className={`py-1.5 px-2.5 rounded-lg text-[11px] font-black transition-all shadow border-none outline-none shrink-0 ${
+                coins >= autoClickerPrice 
+                  ? "bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer" 
+                  : "bg-slate-800 text-gray-500 cursor-not-allowed opacity-50"
+              }`}
+            >
+              {autoClickerPrice.toLocaleString()} 💰
+            </button>
+          </div>
+        </div>
+      )}
+      {activeMainTab === "quests" && renderQuestsContent()}
+      {activeMainTab === "chat" && renderChatContent()}
+      {activeMainTab === "shop" && renderShopContent()}
+      {activeMainTab === "social" && renderSocialContent()}
+      {activeMainTab === "settings" && renderSettingsContent()}
+      {activeMainTab === "clanwars" && renderClanWarsContent()}
+    </>
+  );
+
+  const bottomNavigationSection = (
+    <div className="flex justify-between items-center bg-slate-950/60 p-1.5 rounded-xl gap-1 shrink-0 h-[70px] border border-white/10 select-none shadow-2xl relative z-20">
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: "spring", stiffness: 450, damping: 18 }}
+        onClick={() => setActiveMainTab("upgrades")}
+        className={`touch-manipulation flex-1 flex flex-col items-center justify-center h-full rounded-lg transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
+          activeMainTab === "upgrades"
+            ? "text-white bg-[#e67e22] shadow-[0_4px_12px_rgba(230,126,34,0.4)]"
+            : "text-gray-400 hover:text-white hover:bg-white/5"
+        }`}
+      >
+        <Sparkles className="w-5 h-5 mb-0.5" />
+        <span className="text-[9px] font-black tracking-wide leading-none">Улучшения</span>
+      </motion.button>
+      
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: "spring", stiffness: 450, damping: 18 }}
+        onClick={() => setActiveMainTab("quests")}
+        className={`touch-manipulation flex-1 flex flex-col items-center justify-center h-full rounded-lg transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
+          activeMainTab === "quests"
+            ? "text-white bg-[#e67e22] shadow-[0_4px_12px_rgba(230,126,34,0.4)]"
+            : "text-gray-400 hover:text-white hover:bg-white/5"
+        }`}
+      >
+        <Star className="w-5 h-5 mb-0.5" />
+        <span className="text-[9px] font-black tracking-wide leading-none">Квесты</span>
+      </motion.button>
+
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: "spring", stiffness: 450, damping: 18 }}
+        onClick={() => setActiveMainTab("chat")}
+        className={`touch-manipulation flex-1 flex flex-col items-center justify-center h-full rounded-lg transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
+          activeMainTab === "chat"
+            ? "text-white bg-[#e67e22] shadow-[0_4px_12px_rgba(230,126,34,0.4)]"
+            : "text-gray-400 hover:text-white hover:bg-white/5"
+        }`}
+      >
+        <MessageSquare className="w-5 h-5 mb-0.5" />
+        <span className="text-[9px] font-black tracking-wide leading-none">Чат</span>
+      </motion.button>
+
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: "spring", stiffness: 450, damping: 18 }}
+        onClick={() => {
+          setActiveSocialTab("players");
+          setActiveMainTab("social");
+        }}
+        className={`touch-manipulation flex-1 flex flex-col items-center justify-center h-full rounded-lg transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
+          activeMainTab === "social"
+            ? "text-white bg-[#e67e22] shadow-[0_4px_12px_rgba(230,126,34,0.4)]"
+            : "text-gray-400 hover:text-white hover:bg-white/5"
+        }`}
+      >
+        <Globe className="w-5 h-5 mb-0.5" />
+        <span className="text-[9px] font-black tracking-wide leading-none">Соц. сеть</span>
+      </motion.button>
+
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: "spring", stiffness: 450, damping: 18 }}
+        onClick={() => setActiveMainTab("clanwars")}
+        className={`touch-manipulation flex-1 flex flex-col items-center justify-center h-full rounded-lg transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
+          activeMainTab === "clanwars"
+            ? "text-white bg-[#e67e22] shadow-[0_4px_12px_rgba(230,126,34,0.4)]"
+            : "text-gray-400 hover:text-white hover:bg-white/5"
+        }`}
+      >
+        <Swords className="w-5 h-5 mb-0.5" />
+        <span className="text-[9px] font-black tracking-wide leading-none">Битвы</span>
+      </motion.button>
+
+      <motion.button
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: "spring", stiffness: 450, damping: 18 }}
+        onClick={() => setActiveMainTab("shop")}
+        className={`touch-manipulation flex-1 flex flex-col items-center justify-center h-full rounded-lg transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
+          activeMainTab === "shop"
+            ? "text-white bg-[#e67e22] shadow-[0_4px_12px_rgba(230,126,34,0.4)]"
+            : "text-gray-400 hover:text-white hover:bg-white/5"
+        }`}
+      >
+        <Store className="w-5 h-5 mb-0.5" />
+        <span className="text-[9px] font-black tracking-wide leading-none">Магазин</span>
+      </motion.button>
+    </div>
+  );
+
   return (
     <div 
-      className={`min-h-screen text-white font-sans flex items-center justify-center transition-all duration-300 relative overflow-x-hidden overflow-y-auto ${
-        appVersion === "pc" ? "p-10" : "p-3"
+      className={`text-white font-sans flex items-center justify-center transition-all duration-300 relative overflow-hidden select-none ${
+        appVersion === "pc" ? "p-4 w-screen h-screen md:p-8" : "p-2 w-screen h-[100dvh] pb-4"
       }`}
       style={{
         background: isLiquidGlass 
@@ -4892,9 +6561,13 @@ export default function App() {
       {/* Primary container */}
       <div 
         id="gameContainer" 
-        className={`w-full max-w-[420px] rounded-[30px] p-5 shadow-2xl relative overflow-hidden flex flex-col gap-4 z-10 transition-all duration-500 ${
+        className={`w-full transition-all duration-500 relative overflow-hidden flex flex-col z-10 ${
+          appVersion === "pc" 
+            ? "max-w-[1240px] h-[92vh] max-h-[820px] p-6" 
+            : "max-w-[430px] h-[94vh] max-h-[840px] p-4.5"
+        } rounded-[28px] shadow-2xl ${
           isLiquidGlass 
-            ? "border border-white/25 bg-white/[0.06]" 
+            ? "border border-white/20 bg-white/[0.05]" 
             : "border border-white/10"
         }`}
         style={{
@@ -4908,16 +6581,48 @@ export default function App() {
         }}
       >
         {/* Network & Realtime Ticking Clock Header */}
-        <div className="absolute top-1 left-3 right-12 z-10 flex justify-between items-center pointer-events-none select-none">
-          <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-full bg-slate-900/60 border border-white/5 shadow-sm">
-            <span className={`w-1.5 h-1.5 rounded-full ${isTimeSynced ? "bg-amber-400 animate-pulse" : "bg-zinc-600 animate-pulse"}`}></span>
-            <span className="text-[9.5px] text-[#ffd966] font-extrabold font-mono tracking-wider">
-              {realTime || "00:00:00"}
-            </span>
+        <div className="absolute top-1.5 left-4 right-12 z-10 flex justify-between items-center pointer-events-none select-none">
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-full bg-slate-905/60 border border-white/5 shadow-sm">
+              <span className={`w-1 h-1 rounded-full ${isTimeSynced ? "bg-amber-400 animate-pulse" : "bg-zinc-650"}`}></span>
+              <span className="text-[9px] text-[#ffd966] font-extrabold font-mono tracking-wider">
+                {realTime || "00:00:00"}
+              </span>
+            </div>
+
+            {/* VK Bridge Connection Indicator UI */}
+            {vkInitStatus !== "not_vk" && vkInitStatus !== "idle" && (
+              <button
+                type="button"
+                onClick={vkInitStatus === "error" ? () => { initVKMiniApp(); } : undefined}
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full border shadow-sm text-[8px] font-black font-mono tracking-wide pointer-events-auto select-none transition-all outline-none bg-transparent ${
+                  vkInitStatus === "initializing"
+                    ? "border-[#3498db]/20 text-[#3498db] animate-pulse"
+                    : vkInitStatus === "success"
+                    ? "border-emerald-500/20 text-emerald-400"
+                    : "border-rose-500/30 text-rose-300 hover:bg-rose-950/40 cursor-pointer active:scale-95"
+                }`}
+                title={vkInitStatus === "error" ? `Ошибка VK: ${vkInitError || "Нажмите для повтора"}` : `VK Инициализация: ${vkInitStatus}`}
+              >
+                <span className={`w-1 h-1 rounded-full ${
+                  vkInitStatus === "initializing"
+                    ? "bg-blue-400 animate-bounce"
+                    : vkInitStatus === "success"
+                    ? "bg-emerald-400"
+                    : "bg-rose-400 animate-pulse"
+                }`}></span>
+                <span>
+                  {vkInitStatus === "initializing" && "VK..."}
+                  {vkInitStatus === "success" && "VK: Ок"}
+                  {vkInitStatus === "error" && "VK: Сбой (🔄)"}
+                </span>
+              </button>
+            )}
           </div>
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-900/60 border border-white/5 shadow-sm">
-            <span className={`w-1.5 h-1.5 rounded-full ${networkConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`}></span>
-            <span className="text-[9px] text-[#aab3c4] font-semibold tracking-wider font-mono uppercase">
+
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-905/60 border border-white/5 shadow-sm">
+            <span className={`w-1 h-1 rounded-full ${networkConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`}></span>
+            <span className="text-[8.5px] text-[#aab3c4] font-semibold tracking-wider font-mono uppercase">
               {networkConnected ? "Online" : "Offline"}
             </span>
           </div>
@@ -4930,7 +6635,7 @@ export default function App() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="bg-slate-900/80 border border-[#e67e22]/35 text-[#ffd966] text-[11px] font-bold py-1.5 px-3 rounded-xl flex items-center justify-between shadow-inner"
+              className="bg-slate-900/80 border border-[#e67e22]/35 text-[#ffd966] text-[10.5px] font-bold py-1 px-2 mb-2 rounded-xl flex items-center justify-between shadow-inner"
             >
               <span>{networkEventNotice}</span>
               <button onClick={() => setNetworkEventNotice(null)} className="text-white/40 hover:text-white ml-2 text-xs border-none bg-transparent cursor-pointer">✕</button>
@@ -4938,248 +6643,60 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Top profile component */}
-        <div className="flex justify-between items-center bg-black/30 rounded-[20px] p-3 text-sm border border-white/5">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-full overflow-hidden border border-amber-400/40 bg-slate-950 flex shadow-inner shrink-0">
-              <img src={playerPhotoURL} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).src = "https://api.dicebear.com/7.x/pixel-art/svg?seed=Lucky"; }} />
+        {/* Dynamic Responsive Layout */}
+        {appVersion === "pc" ? (
+          <div className="flex flex-row gap-6 h-full min-h-0 overflow-hidden relative pt-3">
+            {/* Left Column: Stats & Tapping */}
+            <div className="w-[360px] flex flex-col gap-4 shrink-0 h-full overflow-y-auto pr-1">
+              {profileSection}
+              {energySection}
+              {scoreSection}
+              {clickAreaSection}
+              {levelProgressSection}
             </div>
-            <div className="flex flex-col min-w-0">
-              <span className="text-[#ffd966] font-extrabold text-[14px] flex items-center gap-1.5 leading-none truncate">
-                {playerName}
-              </span>
-              <span className="text-[10px] text-[#9ca7b5] mt-1 font-medium leading-none truncate">
-                {playerClan ? `🏰 [${playerClan}]` : "⚠️ Без клана"}
-              </span>
-            </div>
-          </div>
-          <div className="flex gap-1.5 shrink-0">
-            <button 
-              type="button"
-              className="w-10 h-10 rounded-xl bg-[#2c3e50] hover:bg-[#34495e] transition-colors flex items-center justify-center text-lg font-bold shadow-md cursor-pointer border-none outline-none active:scale-95"
-              onClick={() => setActiveMainTab("settings")}
-              title="Настройки"
-            >
-              <Settings className="w-5 h-5 text-white" />
-            </button>
-          </div>
-        </div>
 
-        {/* Energy system indicators */}
-        <div className="bg-black/20 rounded-[20px] p-3.5 relative border border-white/5">
-          <div className="flex justify-between items-center text-xs text-[#bbd9ff] font-semibold mb-2 font-mono">
-            <span>⚡ РЕЗЕРВ ЭНЕРГИИ</span>
-            <span className="text-[#2ecc71]">{regenRate > 0 ? `+${regenRate}/сек` : ""}</span>
-          </div>
-          <div className="w-full bg-[#1e2a3a] rounded-full h-3.5 overflow-hidden p-0.5 relative">
-            <div 
-              className={`h-full rounded-full transition-all duration-300 ${
-                (energy / maxEnergy) < 0.2 
-                  ? "bg-gradient-to-r from-red-500 to-red-600 animate-pulse" 
-                  : "bg-gradient-to-r from-[#3498db] to-[#2980b9]"
-              }`}
-              style={{ width: `${(energy / maxEnergy) * 100}%` }}
-            ></div>
-          </div>
-          <div className="flex justify-between items-center text-[11px] text-[#ffd966] mt-2 font-mono font-medium">
-            <span>{Math.floor(energy)} / {maxEnergy}</span>
-            <span className="opacity-80 text-[#8fa2be]">Клик: -1 ⚡</span>
-          </div>
-        </div>
-
-        {/* Score indicator card */}
-        <div className="text-center my-1">
-          <div className="text-[11px] text-[#7f8c8d] uppercase tracking-wider font-extrabold font-mono">Ваш баланс</div>
-          <div className="text-5xl font-black text-white mt-1 select-none font-mono drop-shadow-[0_4px_12px_rgba(255,255,255,0.1)]">
-            {Math.floor(coins).toLocaleString()}
-          </div>
-        </div>
-
-        {/* Click Area button wrapper */}
-        <div className="flex justify-center my-1 select-none">
-          <button 
-            onTouchStart={handleManualClick}
-            onClick={handleManualClick}
-            disabled={energy <= 0}
-            className={`w-[155px] h-[155px] rounded-full flex items-center justify-center relative select-none transition-transform duration-75 outline-none border-none cursor-pointer focus:ring-0 select-none touch-manipulation ${
-              energy <= 0 ? "grayscale opacity-50 cursor-not-allowed scale-95" : "active:scale-95 active:translate-y-1"
-            }`}
-            style={{
-              background: "radial-gradient(circle at 30% 30%, #ffaa44, #d35400)",
-              boxShadow: energy <= 0 ? "none" : "0 8px 0 #a04000, 0 16px 24px rgba(0,0,0,0.45)",
-            }}
-          >
-            <span className="text-6xl select-none pointer-events-none filter drop-shadow-[0_4px_10px_rgba(0,0,0,0.35)]">
-              💎
-            </span>
-          </button>
-        </div>
-
-        {/* Level progress indicator */}
-        <div className="bg-black/20 rounded-[20px] p-3.5 relative border border-white/5 select-none text-sm">
-          <div className="flex justify-between items-center text-xs text-[#ffd966] font-extrabold mb-1.5 font-mono">
-            <span>⭐ УРОВЕНЬ {lvlInfo.lvl}</span>
-            <span className="text-[#aab3c4] text-[10px] font-bold">({lvlInfo.progressInLvl} / {lvlInfo.neededInLvl} кликов)</span>
-          </div>
-          
-          <div className="w-full bg-[#1e2a3a] rounded-full h-3 overflow-hidden p-[1px] relative">
-            <div 
-              className="h-full rounded-full bg-gradient-to-r from-amber-500 via-amber-400 to-[#e67e22] transition-all duration-300"
-              style={{ width: `${lvlInfo.pct}%` }}
-            ></div>
-          </div>
-          
-          <div className="flex justify-between items-center text-[10px] text-gray-400 font-mono font-medium mt-1.5 leading-none">
-            <span>Прогресс до Уровня {lvlInfo.lvl + 1}</span>
-            <span className="text-amber-400 font-bold">{Math.round(lvlInfo.pct)}%</span>
-          </div>
-        </div>
-
-        {/* Content Tabs render cards */}
-        <div 
-          className="bg-black/25 rounded-[22px] p-4 h-[460px] flex flex-col min-h-[460px] overflow-y-auto gap-3.5 border border-white/5 shadow-inner relative"
-        >
-          {activeMainTab === "upgrades" && (
-            <div className="flex flex-col gap-3">
-              {/* Click Upgrade Card */}
-              <div className="bg-[#162239] rounded-2xl p-3 flex justify-between items-center border border-white/5 animate-fade-in">
-                <div className="flex flex-col">
-                  <span className="text-xs font-extrabold text-[#ffbc6e] flex items-center gap-1 uppercase">👊 Сила клика</span>
-                  <span className="text-[10.5px] text-[#aab7c4] mt-0.5 font-sans font-medium">Уровень {clickPowerLevel} (+1 монета/клик)</span>
-                </div>
-                <button 
-                  onClick={() => buyUpgrade("click")}
-                  disabled={coins < clickUpgradePrice}
-                  className={`py-2 px-3 rounded-xl text-xs font-black transition-all shadow border-none outline-none ${
-                    coins >= clickUpgradePrice 
-                      ? "bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer" 
-                      : "bg-slate-800 text-gray-500 cursor-not-allowed opacity-50"
-                  }`}
-                >
-                  {clickUpgradePrice.toLocaleString()} 💰
-                </button>
+            {/* Right Column: Tab screen and docked nav */}
+            <div className="flex-1 flex flex-col gap-4 min-w-0 h-full justify-between">
+              {/* Content Panel */}
+              <div className="flex-1 min-h-0 overflow-y-auto bg-black/25 rounded-[22px] p-4.5 border border-white/5 shadow-inner relative flex flex-col">
+                {activeTabContentSection}
               </div>
 
-              {/* Autoclicker Upgrade Card */}
-              <div className="bg-[#162239] rounded-2xl p-3 flex justify-between items-center border border-white/5 animate-fade-in">
-                <div className="flex flex-col flex-1 min-w-0 pr-1.5">
-                  <span className="text-xs font-extrabold text-[#ffbc6e] flex items-center gap-1 uppercase">🤖 Автокликер 24/7</span>
-                  <span className="text-[10.5px] text-[#aab7c4] mt-0.5 truncate select-none leading-normal font-sans font-medium">
-                    Ур.{autoClickerLevel} (+{Math.ceil(autoClickerLevel * 0.5)} монеты/сек)
-                  </span>
-                </div>
-                <button 
-                  onClick={() => buyUpgrade("auto")}
-                  disabled={coins < autoClickerPrice}
-                  className={`py-2 px-3 rounded-xl text-xs font-black transition-all shadow border-none outline-none ${
-                    coins >= autoClickerPrice 
-                      ? "bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer" 
-                      : "bg-slate-800 text-gray-500 cursor-not-allowed opacity-50"
-                  }`}
-                >
-                  {autoClickerPrice.toLocaleString()} 💰
-                </button>
+              {/* Bottom Sticky Nav */}
+              {bottomNavigationSection}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col h-full min-h-0 overflow-hidden pt-3 justify-between">
+            {/* Scrollable area for all game metrics and tabs, preserving original spacious scale */}
+            <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 pb-3 scrollbar-none min-h-0">
+              {profileSection}
+              {energySection}
+              {scoreSection}
+              {clickAreaSection}
+              {levelProgressSection}
+
+              {/* Active Tab Content Panel */}
+              <div className="bg-black/25 rounded-[22px] p-4.5 border border-white/5 shadow-inner flex flex-col shrink-0 min-h-[380px] relative">
+                {activeTabContentSection}
               </div>
             </div>
-          )}
-          {activeMainTab === "quests" && renderQuestsContent()}
-          {activeMainTab === "chat" && renderChatContent()}
-          {activeMainTab === "shop" && renderShopContent()}
-          {activeMainTab === "social" && renderSocialContent()}
-          {activeMainTab === "settings" && renderSettingsContent()}
-          {activeMainTab === "clanwars" && renderClanWarsContent()}
-        </div>
 
-        {/* Bottom Navigation */}
-        <div className="flex justify-between items-center bg-transparent mt-1 h-[72px] gap-1 px-1">
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            onClick={() => setActiveMainTab("upgrades")}
-            className={`flex-1 flex flex-col items-center justify-center h-full rounded-2xl transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
-              activeMainTab === "upgrades"
-                ? "text-white bg-[#e67e22] shadow-[0_4px_15px_rgba(230,126,34,0.3)]"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Sparkles className="w-5 h-5 mb-1" />
-            <span className="text-[9.5px] font-black tracking-wide leading-none">Улучшения</span>
-          </motion.button>
-          
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            onClick={() => setActiveMainTab("quests")}
-            className={`flex-1 flex flex-col items-center justify-center h-full rounded-2xl transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
-              activeMainTab === "quests"
-                ? "text-white bg-[#e67e22] shadow-[0_4px_15px_rgba(230,126,34,0.3)]"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Star className="w-5 h-5 mb-1" />
-            <span className="text-[9.5px] font-black tracking-wide leading-none">Квесты</span>
-          </motion.button>
+            {/* Bottom menu stays permanently pinned at the bottom of the container */}
+            <div className="pt-2 shrink-0">
+              {bottomNavigationSection}
+            </div>
+          </div>
+        )}
+      </div>
 
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            onClick={() => setActiveMainTab("chat")}
-            className={`flex-1 flex flex-col items-center justify-center h-full rounded-2xl transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
-              activeMainTab === "chat"
-                ? "text-white bg-[#e67e22] shadow-[0_4px_15px_rgba(230,126,34,0.3)]"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <MessageSquare className="w-5 h-5 mb-1" />
-            <span className="text-[9.5px] font-black tracking-wide leading-none">Чат</span>
-          </motion.button>
 
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            onClick={() => {
-              setActiveSocialTab("players");
-              setActiveMainTab("social");
-            }}
-            className={`flex-1 flex flex-col items-center justify-center h-full rounded-2xl transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
-              activeMainTab === "social"
-                ? "text-white bg-[#e67e22] shadow-[0_4px_15px_rgba(230,126,34,0.3)]"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Globe className="w-5 h-5 mb-1" />
-            <span className="text-[9.5px] font-black tracking-wide leading-none">Соц. сеть</span>
-          </motion.button>
 
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            onClick={() => setActiveMainTab("clanwars")}
-            className={`flex-1 flex flex-col items-center justify-center h-full rounded-2xl transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
-              activeMainTab === "clanwars"
-                ? "text-white bg-[#e67e22] shadow-[0_4px_15px_rgba(230,126,34,0.3)]"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Swords className="w-5 h-5 mb-1" />
-            <span className="text-[9.5px] font-black tracking-wide leading-none">Битвы</span>
-          </motion.button>
 
-          <motion.button
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", stiffness: 400, damping: 17 }}
-            onClick={() => setActiveMainTab("shop")}
-            className={`flex-1 flex flex-col items-center justify-center h-full rounded-2xl transition-all cursor-pointer border-none outline-none bg-transparent py-1 ${
-              activeMainTab === "shop"
-                ? "text-white bg-[#e67e22] shadow-[0_4px_15px_rgba(230,126,34,0.3)]"
-                : "text-gray-400 hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Store className="w-5 h-5 mb-1" />
-            <span className="text-[9.5px] font-black tracking-wide leading-none">Магазин</span>
-          </motion.button>
-        </div>
-        </div>
+
+
+
+
       {/* Player Profile Dialog */}
       {viewingProfile && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[3000] p-4 text-white">
@@ -5256,6 +6773,24 @@ export default function App() {
                         <Trash2 className="w-4 h-4" /> Удалить
                       </button>
                     )}
+
+                    <button
+                        onClick={() => {
+                          if (mutedPlayers.includes(viewingProfile.id)) {
+                            setMutedPlayers(mutedPlayers.filter(id => id !== viewingProfile.id));
+                          } else {
+                            setMutedPlayers([...mutedPlayers, viewingProfile.id]);
+                          }
+                          setViewingProfile(null);
+                        }}
+                        className={`py-3 border text-xs font-black rounded-2xl cursor-pointer transition-colors flex items-center justify-center gap-1 ${
+                            mutedPlayers.includes(viewingProfile.id) 
+                            ? "bg-amber-900/40 border-amber-500/30 text-amber-300"
+                            : "bg-[#1e293b] hover:bg-[#334155] border-white/5 text-white"
+                        }`}
+                    >
+                        <VolumeX className="w-4 h-4" /> {mutedPlayers.includes(viewingProfile.id) ? "Размутить" : "Замутить"}
+                    </button>
 
                     <div className="py-3 bg-[#0f172a] border border-white/5 text-xs font-black rounded-2xl flex items-center justify-center gap-1.5 opacity-80 select-none">
                       <Shield className="w-4 h-4 text-gray-500" /> 
@@ -5949,9 +7484,9 @@ export default function App() {
                             </div>
                           )}
                           <span className={`absolute -bottom-1 -right-1 text-[8px] font-black px-1 rounded-md text-white font-mono uppercase border border-[#162239] ${
-                            account.type === "telegram" ? "bg-[#2481cc]" : "bg-[#ea4335]"
+                            account.type === "telegram" ? "bg-[#2481cc]" : (account.type === "vk" ? "bg-[#0077ff]" : "bg-[#ea4335]")
                           }`}>
-                            {account.type === "telegram" ? "TG" : "G"}
+                            {account.type === "telegram" ? "TG" : (account.type === "vk" ? "VK" : "G")}
                           </span>
                         </div>
 

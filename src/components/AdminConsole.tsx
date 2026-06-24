@@ -3,7 +3,7 @@ import { collection, getDocs, updateDoc, doc, deleteDoc, addDoc, serverTimestamp
 import { db } from "../firebase";
 import { handleFirestoreError, OperationType } from "../utils/firebaseUtils";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, BarChart, Bar, Cell, Legend } from "recharts";
-import { Users, LayoutDashboard, Settings2, Trash2, ShieldAlert, Award, ArrowLeft, MessageSquare, Store, CheckCircle, Clock, Send, AlertCircle, RefreshCw } from "lucide-react";
+import { Users, LayoutDashboard, Settings2, Trash2, ShieldAlert, Award, ArrowLeft, MessageSquare, Store, CheckCircle, Clock, Send, AlertCircle, RefreshCw, Settings } from "lucide-react";
 
 interface AdminConsoleProps {
   onClose: () => void;
@@ -11,14 +11,66 @@ interface AdminConsoleProps {
 }
 
 export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast }) => {
-  const [activeTab, setActiveTab] = useState<"dashboard" | "players" | "actions" | "support" | "store">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "players" | "actions" | "support" | "store" | "settings" | "clans">("dashboard");
   const [players, setPlayers] = useState<any[]>([]);
   const [supportTickets, setSupportTickets] = useState<any[]>([]);
   const [marketplaceListings, setMarketplaceListings] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Clans Audit states
+  const [selectedClanForVault, setSelectedClanForVault] = useState<string | null>(null);
+  const [selectedClanVaultItems, setSelectedClanVaultItems] = useState<any[]>([]);
+  const [isLoadingClanVault, setIsLoadingClanVault] = useState(false);
+
+  useEffect(() => {
+    if (selectedClanForVault) {
+      setIsLoadingClanVault(true);
+      const unsub = onSnapshot(doc(db, "clans", selectedClanForVault), (snap) => {
+        if (snap.exists() && Array.isArray(snap.data().vault)) {
+          setSelectedClanVaultItems(snap.data().vault);
+        } else {
+          setSelectedClanVaultItems([]);
+        }
+        setIsLoadingClanVault(false);
+      }, (err) => {
+        console.error("Admin listening to clan vault error:", err);
+        setIsLoadingClanVault(false);
+      });
+      return () => unsub();
+    } else {
+      setSelectedClanVaultItems([]);
+    }
+  }, [selectedClanForVault]);
+
+  const handleDeleteItemFromClanVault = async (clanName: string, itemIdx: number) => {
+    addToast("🗑️ Удаление предмета из сейфа клана...");
+    try {
+      const clanRef = doc(db, "clans", clanName);
+      const updatedVault = [...selectedClanVaultItems];
+      updatedVault.splice(itemIdx, 1);
+      
+      await updateDoc(clanRef, { vault: updatedVault });
+      addToast("✅ Предмет успешно удален администратором.");
+    } catch (err: any) {
+      console.error("Admin deleting vault item error:", err);
+      addToast(`⚠️ Ошибка: ${err.message || "Не удалось удалить"}`);
+    }
+  };
+
+  // Memoized stats for support section
+  const openCount = React.useMemo(() => supportTickets.filter(t => t.status === "open" || !t.status).length, [supportTickets]);
+  const closedCount = React.useMemo(() => supportTickets.filter(t => t.status === "closed").length, [supportTickets]);
+  const totalCount = supportTickets.length;
+
+  // General System Config Settings
+  const [cfgSheetId, setCfgSheetId] = useState("");
+  const [cfgVkSecureKey, setCfgVkSecureKey] = useState("");
+  const [cfgVkServiceKey, setCfgVkServiceKey] = useState("");
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+
   // Support section UI states
   const [supportFilter, setSupportFilter] = useState<"all" | "open" | "closed">("open");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "vk" | "tg">("all");
   const [replyTexts, setReplyTexts] = useState<{ [ticketId: string]: string }>({});
   const [sendingReplies, setSendingReplies] = useState<{ [ticketId: string]: boolean }>({});
 
@@ -36,6 +88,50 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
     message: string;
     onConfirm: () => void;
   } | null>(null);
+
+  const fetchConfig = async () => {
+    try {
+      const res = await fetch("/api/admin/config");
+      if (res.ok) {
+        const data = await res.json();
+        setCfgSheetId(data.masterSheetId || "");
+        setCfgVkSecureKey(data.vkSecureKey || "");
+        setCfgVkServiceKey(data.vkServiceKey || "");
+      }
+    } catch (e) {
+      console.error("Failed to fetch admin config keys", e);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    setIsSavingConfig(true);
+    try {
+      const res = await fetch("/api/admin/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          masterSheetId: cfgSheetId.trim(),
+          vkSecureKey: cfgVkSecureKey.trim(),
+          vkServiceKey: cfgVkServiceKey.trim(),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        addToast("✅ Настройки системы успешно сохранены!");
+        setCfgSheetId(data.masterSheetId || "");
+        setCfgVkSecureKey(data.vkSecureKey || "");
+        setCfgVkServiceKey(data.vkServiceKey || "");
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(`❌ Сбой при сохранении: ${err.error || "ошибка сети"}`);
+      }
+    } catch (e: any) {
+      console.error(e);
+      addToast("❌ Ошибка при отправке настроек");
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
 
   // Load Players from DB
   const fetchPlayers = async () => {
@@ -257,6 +353,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
 
     // Also run initial fetch to be safe
     fetchPlayers();
+    fetchConfig();
 
     return () => {
       unsubUsers();
@@ -285,8 +382,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
   const clansStats = React.useMemo(() => {
     const map: { [clanName: string]: { name: string; memberCount: number; totalCoins: number; totalClicks: number } } = {};
     players.forEach(p => {
-      if (p.clan) {
-        const cName = p.clan.trim();
+      const clanVal = p.playerClan || p.clan;
+      if (clanVal) {
+        const cName = clanVal.trim();
         if (cName) {
           if (!map[cName]) {
             map[cName] = { name: cName, memberCount: 0, totalCoins: 0, totalClicks: 0 };
@@ -372,6 +470,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
     });
   };
 
+  const filteredTickets = supportTickets.filter(t => {
+     const matchesFilter = supportFilter === 'all' ? true : (t.status || 'open') === supportFilter;
+     const matchesSource = sourceFilter === 'all' ? true : (t.source || 'tg') === sourceFilter;
+     return matchesFilter && matchesSource;
+  });
+
   return (
     <div className="fixed inset-0 bg-[#0a0f18] z-[9999] flex flex-col text-white font-sans overflow-hidden animate-fade-in">
       {/* Header */}
@@ -419,6 +523,21 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border-none outline-none cursor-pointer ${activeTab === "store" ? "bg-amber-500/20 text-amber-400" : "text-gray-400 hover:bg-white/5"}`}
           >
             <Store className="w-4 h-4" /> Магазин
+          </button>
+          <button 
+            onClick={() => setActiveTab("settings")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border-none outline-none cursor-pointer ${activeTab === "settings" ? "bg-emerald-600/20 text-emerald-400" : "text-gray-400 hover:bg-white/5"}`}
+          >
+            <Settings className="w-4 h-4" /> Настройки
+          </button>
+          <button 
+            onClick={() => {
+              setActiveTab("clans");
+              setSelectedClanForVault(null);
+            }}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border-none outline-none cursor-pointer ${activeTab === "clans" ? "bg-purple-600/20 text-purple-400" : "text-gray-400 hover:bg-white/5"}`}
+          >
+            <ShieldAlert className="w-4 h-4" /> Кланы и Сейфы
           </button>
         </div>
 
@@ -1098,42 +1217,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                 </div>
               )}
 
-              {activeTab === "support" && (() => {
-                const openCount = supportTickets.filter(t => t.status === "open" || !t.status).length;
-                const closedCount = supportTickets.filter(t => t.status === "closed").length;
-                const totalCount = supportTickets.length;
-
-                const filteredTickets = supportTickets.filter(t => {
-                  const status = t.status || "open";
-                  if (supportFilter === "open") return status === "open";
-                  if (supportFilter === "closed") return status === "closed";
-                  return true;
-                });
-
-                return (
-                  <div className="flex flex-col gap-6 animate-fade-in pb-12">
-                    {/* Header with Stats & Actions */}
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#111827] border border-white/5 p-4 rounded-2xl">
-                      <div className="flex flex-col gap-1">
-                        <h2 className="text-sm font-black text-indigo-400 tracking-wider uppercase flex items-center gap-2">
-                          <MessageSquare className="w-5 h-5 text-indigo-400" />
-                          Панель Поддержки
-                        </h2>
-                        <p className="text-xs text-gray-400">Управление обращениями пользователей через бота (команда /support)</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button 
-                          onClick={fetchPlayers} 
-                          disabled={isLoading}
-                          className="flex items-center gap-1.5 text-xs bg-white/5 hover:bg-white/10 active:scale-95 disabled:opacity-50 px-3 py-2 rounded-xl text-white font-bold transition-all cursor-pointer border border-white/10"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isLoading ? "animate-spin" : ""}`} />
-                          <span>Обновить список</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Stats counters */}
+              {activeTab === "support" && (
+                 <div className="flex flex-col gap-6 animate-fade-in">
+                 {/* Stats counters */}
+                 {(() => {
+                  const openCount = supportTickets.filter(t => t.status === "open" || !t.status).length;
+                  const closedCount = supportTickets.filter(t => t.status === "closed").length;
+                  const totalCount = supportTickets.length;
+                  return (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <button 
                         onClick={() => setSupportFilter("open")}
@@ -1168,6 +1259,21 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                         <span className="text-2xl font-black text-indigo-400 mt-1">{totalCount}</span>
                       </button>
                     </div>
+                  );
+                })()}
+
+                    <div className="flex items-center gap-2 px-1">
+                      <span className="text-[10px] font-bold text-gray-500 uppercase">Фильтр по источнику:</span>
+                      {["all", "vk", "tg"].map((src) => (
+                        <button
+                          key={src}
+                          onClick={() => setSourceFilter(src as "all" | "vk" | "tg")}
+                          className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${sourceFilter === src ? "bg-indigo-600 text-white" : "bg-[#111827] hover:bg-white/5 text-gray-400 border border-white/5"}`}
+                        >
+                          {src.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
 
                     {/* Support Tickets Queue */}
                     <div className="flex flex-col gap-4">
@@ -1178,7 +1284,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                           </div>
                           <span className="text-gray-300 font-bold text-sm">Список пуст</span>
                           <span className="text-gray-500 text-xs">
-                            {supportFilter === "open" ? "Все обращения успешно обработаны!" : "Информации с таким фильтром не найдено."}
+                          {supportFilter === "open" ? "Все обращения успешно обработаны!" : "Информации с таким фильтром не найдено."}
                           </span>
                         </div>
                       ) : (
@@ -1208,7 +1314,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                                       )}
                                     </div>
                                     <span className="text-[10px] text-gray-500 font-mono mt-0.5">
-                                      ID: {t.telegramId || "—"} • {t.createdAt ? new Date(Number(t.createdAt)).toLocaleString() : "Неизвестная дата"}
+                                      ID: {t.telegramId || "—"} | Ист: {(t.source || "tg").toUpperCase()} • {t.createdAt ? new Date(Number(t.createdAt)).toLocaleString() : "Неизвестная дата"}
                                     </span>
                                   </div>
                                 </div>
@@ -1324,8 +1430,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                       )}
                     </div>
                   </div>
-                );
-              })()}
+                )}
 
               {activeTab === "store" && (
                 <div className="flex flex-col gap-6 animate-fade-in pb-10">
@@ -1381,6 +1486,196 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                               title="Удалить лот (без возврата)"
                             >
                               <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "settings" && (
+                <div className="flex flex-col gap-6 animate-fade-in pb-10 max-w-2xl">
+                  <div className="bg-[#111827] border border-white/5 rounded-2xl p-6 flex flex-col gap-4">
+                    <div className="flex items-center gap-2 text-emerald-400">
+                      <Settings className="w-5 h-5" />
+                      <h2 className="text-sm font-black tracking-widest uppercase">Настройки Системы и VK Ключи</h2>
+                    </div>
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      Управление ключами доступа, Google-таблицей и интеграцией с ВКонтакте.
+                    </p>
+
+                    <div className="h-px bg-white/5 my-2" />
+
+                    {/* Google Sheets ID */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+                        Google Sheets Master ID
+                      </label>
+                      <input 
+                        type="text"
+                        placeholder="Google Sheets ID (из URL таблицы)"
+                        value={cfgSheetId}
+                        onChange={(e) => setCfgSheetId(e.target.value)}
+                        className="bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-gray-500 font-sans outline-none focus:border-indigo-500/50 transition-colors"
+                      />
+                      <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Идентификатор общей Google Таблицы для занесения участников.
+                      </span>
+                    </div>
+
+                    {/* VK Service Key */}
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                        🔑 VK Сервисный ключ (Service Key)
+                      </label>
+                      <input 
+                        type="password"
+                        placeholder="vk_service_key..."
+                        value={cfgVkServiceKey}
+                        onChange={(e) => setCfgVkServiceKey(e.target.value)}
+                        className="bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors"
+                      />
+                      <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Сервисный ключ приложения ВКонтакте (используется для обращения к API с сервера).
+                      </span>
+                    </div>
+
+                    {/* VK Secure Key */}
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                        🛡️ VK Защищённый ключ (Secure Key / Client Secret)
+                      </label>
+                      <input 
+                        type="password"
+                        placeholder="vk_secure_key..."
+                        value={cfgVkSecureKey}
+                        onChange={(e) => setCfgVkSecureKey(e.target.value)}
+                        className="bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors"
+                      />
+                      <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Защищенный ключ приложения ВКонтакте (используется для верификации подписей параметров запуска).
+                      </span>
+                    </div>
+
+                    <div className="h-px bg-white/5 my-3" />
+
+                    <div className="flex justify-end mt-2">
+                      <button
+                        onClick={handleSaveConfig}
+                        disabled={isSavingConfig}
+                        className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black rounded-xl cursor-pointer text-xs flex items-center gap-2 transition-all active:scale-95 border-none outline-none"
+                      >
+                        {isSavingConfig ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Сохранение...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            <span>Сохранить настройки</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "clans" && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in pb-10">
+                  {/* Left Column: Clan List */}
+                  <div className="lg:col-span-5 bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col gap-3">
+                    <div className="flex items-center gap-2 text-purple-400 pb-2 border-b border-white/5">
+                      <ShieldAlert className="w-5 h-5" />
+                      <h2 className="text-xs font-black tracking-widest uppercase">Все Кланы ({clansStats.length})</h2>
+                    </div>
+
+                    <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto pr-1">
+                      {clansStats.length === 0 ? (
+                        <div className="text-[11px] text-gray-500 text-center py-8">
+                          Активные кланы в системе отсутствуют
+                        </div>
+                      ) : (
+                        clansStats.map((cl, idx) => (
+                          <div 
+                            key={cl.name || idx} 
+                            onClick={() => setSelectedClanForVault(cl.name)}
+                            className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 ${
+                              selectedClanForVault === cl.name 
+                                ? "bg-purple-600/10 border-purple-500/30" 
+                                : "bg-black/20 border-white/5 hover:border-white/10"
+                            }`}
+                          >
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-extrabold text-white">{cl.name}</span>
+                              <span className="text-[10px] bg-purple-500/20 text-purple-300 font-mono font-bold px-1.5 py-0.5 rounded">
+                                {cl.memberCount} участников
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center text-[10px] text-gray-400 font-mono">
+                              <span>💰 Валюта: {Math.floor(cl.totalCoins).toLocaleString()}</span>
+                              <span>🖱️ Клик: {cl.totalClicks.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Column: Clan Vault View */}
+                  <div className="lg:col-span-7 bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col gap-3">
+                    <div className="flex items-center gap-2 text-amber-400 pb-2 border-b border-white/5">
+                      <Award className="w-5 h-5" />
+                      <h2 className="text-xs font-black tracking-widest uppercase">
+                        {selectedClanForVault ? `Общий сейф предмета: ${selectedClanForVault}` : "Просмотр Сейфа"}
+                      </h2>
+                    </div>
+
+                    {!selectedClanForVault ? (
+                      <div className="flex flex-col items-center justify-center py-20 px-4 text-center text-gray-500">
+                        <ShieldAlert className="w-10 h-10 text-gray-700 mb-3" />
+                        <span className="text-xs font-sans">Выберите клан в списке слева, чтобы просмотреть его общий сейф предметов.</span>
+                      </div>
+                    ) : isLoadingClanVault ? (
+                      <div className="text-xs text-gray-500 text-center py-20 animate-pulse font-mono uppercase tracking-wider">
+                        Загрузка содержимого сейфа...
+                      </div>
+                    ) : selectedClanVaultItems.length === 0 ? (
+                      <div className="text-center py-20 px-4">
+                        <p className="text-xs text-gray-400 font-bold mb-1">Сейф пуст 📦</p>
+                        <p className="text-[10px] text-gray-550 max-w-xs mx-auto">Участники этого клана еще не занесли ни одного предмета в совместный сейф.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto pr-1">
+                        {selectedClanVaultItems.map((item, idx) => (
+                          <div key={item.id || idx} className="bg-black/30 border border-white/5 hover:border-amber-500/10 rounded-xl p-3 flex justify-between items-center gap-3">
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs font-black text-amber-100 truncate">{item.name || item.title || "Предмет"}</span>
+                              <span className="text-[10px] text-[#ffbc6e] font-mono tracking-wider mt-0.5 font-bold">
+                                {item.productionRate ? `+${item.productionRate} 💰/сек` : ""} {item.multiplier ? `x${item.multiplier} Буст` : ""}
+                              </span>
+                              {item.depositedBy && (
+                                <span className="text-[9px] text-gray-500 mt-1 font-sans">
+                                  👤 Владелец: <span className="text-purple-400 font-bold">{item.depositedBy}</span> (ID: <span className="font-mono">{item.depositedById?.slice(0, 8)}...</span>)
+                                </span>
+                              )}
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setConfirmModal({
+                                  isOpen: true,
+                                  title: "Изъять предмет",
+                                  message: `Вы действительно хотите безвозвратно удалить предмет "${item.name || item.title}" из сейфа клана "${selectedClanForVault}"?`,
+                                  onConfirm: () => handleDeleteItemFromClanVault(selectedClanForVault, idx)
+                                });
+                              }}
+                              className="px-3 py-2 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white text-[10px] rounded-lg font-black transition-all cursor-pointer shrink-0 border-none outline-none"
+                            >
+                              Удалить 🗑️
                             </button>
                           </div>
                         ))}

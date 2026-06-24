@@ -1,26 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Catch-all safety gate deny-by-default rule
     match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Individual user document matches
-    match /users/{userId} {
-      allow read, write: if true;
-    }
-
-    match /support_tickets/{ticketId} {
-      allow read, write: if true;
-    }
-
-    match /bot_locks/{lockId} {
-      allow read, write: if true;
-    }
-
-    // General marketplace listings matches
-    match /marketplace/{listingId} {
       allow read, write: if true;
     }
   }

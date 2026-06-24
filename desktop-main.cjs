@@ -38,15 +38,15 @@ function createWindow() {
     }
   });
 
-  // Use the live shared URL for the project
+  // Connect to the live game server
   const liveUrl = "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app";
   
-  console.log("Launching Клик Клан desktop client. Connecting to:", liveUrl);
+  console.log("Launching Клик Клан desktop client. Connecting to central server:", liveUrl);
   mainWindow.loadURL(liveUrl);
 
-  // Handle page failures (e.g. server starting delay) with an automatic reload
+  // Handle page failures (e.g. connectivity issues) with an automatic reload
   mainWindow.webContents.on("did-fail-load", () => {
-    console.log("Server not fully loaded yet, retrying...");
+    console.log("Live server connection failed, retrying...");
     setTimeout(() => {
       if (mainWindow) {
         mainWindow.loadURL("https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app");
@@ -94,12 +94,8 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
-  startServer();
-  // Wait a moment for server to bind port, then open user interface window
-  setTimeout(() => {
-    createWindow();
-    createTray();
-  }, 1500);
+  createWindow();
+  createTray();
 });
 
 app.on("window-all-closed", () => {
@@ -108,8 +104,4 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
-  console.log("Shutting down backend server...");
-  if (serverProcess) {
-    serverProcess.kill("SIGTERM");
-  }
 });

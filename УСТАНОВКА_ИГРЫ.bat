@@ -107,7 +107,7 @@ set "CURR_DIR=%~dp0"
 if "%CURR_DIR:~-1%"=="\" set "CURR_DIR=%CURR_DIR:~0,-1%"
 
 set "SHORTCUT_PATH=%USERPROFILE%\Desktop\ИГРА КЛИК КЛАН.lnk"
-set "TARGET_PATH=%CURR_DIR%\start-desktop.bat"
+set "TARGET_PATH=%CURR_DIR%\start.bat"
 set "WORKING_DIR=%CURR_DIR%"
 
 echo Создаем ярлык: %SHORTCUT_PATH%
@@ -117,7 +117,7 @@ if exist "%SHORTCUT_PATH%" (
     echo [OK] Ярлык "ИГРА КЛИК КЛАН" успешно создан на вашем Рабочем Столе!
 ) else (
     echo [ИНФО] Не удалось создать ярлык на Рабочем Столе, но игра полностью готова к запуску!
-    echo Вы можете запустить её вручную кликом по start-desktop.bat в этой папке.
+    echo Вы можете запустить её вручную кликом по start.bat в этой папке.
 )
 
 echo.
@@ -135,7 +135,7 @@ npx electron desktop-main.cjs
 if %errorlevel% neq 0 (
     echo.
     echo [ВНИМАНИЕ] Не удалось запустить игру напрямую через Electron.
-    echo Пожалуйста, зайдите в папку с игрой и запустите start-desktop.bat вручную.
+    echo Пожалуйста, зайдите в папку с игрой и запустите start.bat вручную.
     pause
 )
 exit

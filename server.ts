@@ -180,6 +180,8 @@ interface ChatMessage {
 
 const PORT = 3000;
 const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const httpServer = createServer(app);
 
 // Use a shared WebSocket server
@@ -240,6 +242,8 @@ interface ClanWarState {
   history: ClanWarHistoryRecord[];
 }
 
+let isGameRunning = true;
+
 let clanWarState: ClanWarState = {
   isWarActive: false,
   countdownSeconds: 0,
@@ -259,6 +263,10 @@ let currentMarketplaceListings: any[] = [];
 async function listenToMarketplace() {
   try {
     const dbInstance = await getAuthenticatedDb();
+    if (!dbInstance) {
+      console.warn("[Marketplace Sync] Database not available, skipping listener.");
+      return;
+    }
     const marketplaceCol = collection(dbInstance, "marketplace");
     const q = query(marketplaceCol, where("status", "==", "active"));
     
@@ -292,6 +300,10 @@ let isHydrated = false;
 async function syncUsersFromFirestore() {
   try {
     const dbInstance = await getAuthenticatedDb();
+    if (!dbInstance) {
+      console.warn("[Users Sync] Database not available, skipping hydration.");
+      return;
+    }
     const usersCol = collection(dbInstance, "users");
     
     console.log("[Users Sync] Subscribing to 'users' collection in Firestore 24/7...");
@@ -405,7 +417,7 @@ function broadcastPlayers() {
   broadcast({
     type: "players_update",
     data: {
-      players: Array.from(players.values()).filter(p => p.isOnline),
+      players: Array.from(players.values()),
       clanPrivacy: getClansPrivacyList()
     }
   });
@@ -878,6 +890,8 @@ httpServer.on("upgrade", (request, socket, head) => {
 });
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8629175241:AAE4T1QAns_SqkCMXnGRI-_mRHqChzET8p4";
+const VK_BOT_TOKEN = process.env.VK_BOT_TOKEN || "";
+const VK_GROUP_ID = process.env.VK_GROUP_ID || "";
 
 const CONFIG_FILE = path.join(process.cwd(), "sheet_config.json");
 let masterSheetId = "";
@@ -897,7 +911,11 @@ function loadConfig() {
 
 function saveConfig() {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ masterSheetId, admins }, null, 2), "utf8");
+    fs.writeFileSync(
+      CONFIG_FILE,
+      JSON.stringify({ masterSheetId, admins }, null, 2),
+      "utf8"
+    );
   } catch (e) {
     console.error("Failed to write sheet config:", e);
   }
@@ -976,6 +994,9 @@ const botChatStates = new Map<number, BotChatState>();
 // Default application layout custom main menu keyboard
 const DEFAULT_KEYBOARD = {
   keyboard: [
+    [
+      { text: "🎮 Играть!" }
+    ],
     [
       { text: "👤 Мой Профиль" },
       { text: "💾 Сохранить прогресс" }
@@ -1068,6 +1089,132 @@ async function sendCleanBotMessage(chatId: number, text: string, options: any = 
   return null;
 }
 
+const VK_DEFAULT_KEYBOARD = JSON.stringify({
+  one_time: false,
+  buttons: [
+    [{ action: { type: "text", label: "🎮 Играть!" }, color: "positive" }]
+  ]
+});
+
+async function sendVkMessage(peer_id: number, message: string, opts?: any) {
+  try {
+    const params = new URLSearchParams();
+    params.set("peer_id", String(peer_id));
+    params.set("message", message);
+    params.set("random_id", String(Math.floor(Math.random() * 2000000000)));
+    params.set("keyboard", opts?.keyboard || VK_DEFAULT_KEYBOARD);
+    params.set("access_token", VK_BOT_TOKEN);
+    params.set("v", "5.199");
+    const resp = await fetch("https://api.vk.com/method/messages.send", { method: "POST", body: params });
+    const data = await resp.json();
+    console.log("VK response:", JSON.stringify(data));
+  } catch(e) {
+    console.error("VK msg error", e);
+  }
+}
+
+async function startVkBotPolling() {
+  if (!VK_BOT_TOKEN || !VK_GROUP_ID) return;
+  console.log("Starting VK Bot Polling loop...");
+
+  let vkLongPollVars = { server: "", key: "", ts: "" };
+  try {
+    const res = await fetch(`https://api.vk.com/method/groups.getLongPollServer?group_id=${VK_GROUP_ID}&access_token=${VK_BOT_TOKEN}&v=5.199`);
+    const data = await res.json();
+    if (data.response) vkLongPollVars = data.response;
+  } catch(e) {}
+
+  while (true) {
+    try {
+      if (!vkLongPollVars.server) {
+        await new Promise(r => setTimeout(r, 5000));
+        continue;
+      }
+      const response = await fetch(`${vkLongPollVars.server}?act=a_check&key=${vkLongPollVars.key}&ts=${vkLongPollVars.ts}&wait=25`);
+      const data = await response.json();
+      
+      if (data.failed) {
+        const res = await fetch(`https://api.vk.com/method/groups.getLongPollServer?group_id=${VK_GROUP_ID}&access_token=${VK_BOT_TOKEN}&v=5.199`);
+        const initData = await res.json();
+        if (initData.response) vkLongPollVars = initData.response;
+        continue;
+      }
+      vkLongPollVars.ts = data.ts;
+
+      if (data.updates && data.updates.length > 0) {
+        for (const update of data.updates) {
+          if (update.type === "message_new" && update.object && update.object.message) {
+            const msg = update.object.message;
+            const peer_id = msg.peer_id;
+            const text = (msg.text || "").trim();
+            const from_id = msg.from_id;
+            
+            let mappedText = text;
+            if (text === "🎮 Играть!") mappedText = "/play";
+            else if (text === "👤 Мой Профиль") mappedText = "/profile";
+            else if (text === "🔑 Код для входа") mappedText = "/code";
+            else if (text === "🔔 Последнее уведомление") mappedText = "/last_notification";
+            else if (text === "💾 Сохранить прогресс") mappedText = "/save";
+            else if (text === "🧹 Очистить чат") mappedText = "/clear_chat";
+            else if (text === "💬 Поддержка") mappedText = "/support";
+            else if (text === "❓ Справка") mappedText = "/aide";
+
+            const upperMappedText = mappedText.toUpperCase();
+            let potentialCode = "";
+            if (upperMappedText.length === 6 && /^[A-Z0-9]{6}$/.test(upperMappedText)) {
+              potentialCode = upperMappedText;
+            }
+
+            if (potentialCode) {
+              if (pendingClientCodes.has(potentialCode)) {
+                const codeData = pendingClientCodes.get(potentialCode)!;
+                codeData.telegramUser = { id: String(from_id), username: `vk_${from_id}`, first_name: "VK", last_name: "Игрок" };
+                codeData.resolved = true;
+                await sendVkMessage(peer_id, "⏳ Секунду...");
+                await new Promise((resolve) => setTimeout(resolve, 5000));
+                
+                let statsLine = "";
+                Array.from(players.values()).forEach((p) => {
+                  if (p.telegramId === String(from_id) || p.username === `vk_${from_id}`) {
+                    statsLine = `📊 Ваш Аккаунт:\nУровень: ${p.clicks}\nМонеты: ${p.coins} 💰\n\n`;
+                  }
+                });
+                await sendVkMessage(peer_id, `ура вы подключены, теперь у вас доступ к уведомлениям! 🎮\n\n${statsLine}✨ Ваш игровой профиль успешно синхронизирован!`);
+              }
+            } else if (mappedText.toLowerCase() === "/code" || mappedText.toLowerCase() === "войти" || mappedText.toLowerCase() === "login" || mappedText.toLowerCase() === "начать") {
+              const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+              let code = "";
+              for (let i = 0; i < 6; i++) code += characters.charAt(Math.floor(Math.random() * characters.length));
+              verificationCodes.set(code, {
+                id: String(from_id),
+                username: `vk_${from_id}`,
+                first_name: "Игрок",
+                last_name: "VK",
+                photo_url: "",
+                createdAt: Date.now()
+              });
+              const codeMessage = `👋 *Привет, Игрок VK!* ✨\n\n🔑 Ваш одноразовый код для входа на сайте:\n👉 ${code} 👈\n\n🎮 *Удачной игры!*`;
+              await sendVkMessage(peer_id, codeMessage);
+            } else if (mappedText.toLowerCase() === "/play") {
+              const inlineKbd = JSON.stringify({
+                inline: true,
+                buttons: [[{ action: { type: "open_link", link: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app", label: "🎮 Открыть Игру" } }]]
+              });
+              await sendVkMessage(peer_id, "🎮 *Погнали играть!*\n\nЗапускай игру прямо сейчас по ссылке:", { keyboard: inlineKbd });
+            } else if (mappedText.toLowerCase() === "/clear_chat") {
+              await sendVkMessage(peer_id, "🧹 *История чата очищена (визуально для бота)!*");
+            }
+            // Убираем фоллбэк (else). Если сервер не узнал команду, он просто промолчит,
+            // а сообщение подхватит и обработает VK CXhub (например, FAQ или воронка).
+          }
+        }
+      }
+    } catch(e) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+}
+
 let lastUpdateId = 0;
 const processedUpdateIdsInMemory = new Set<number>();
 
@@ -1115,7 +1262,12 @@ async function startTelegramBotPolling() {
 
   while (true) {
     try {
-      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=15`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000); // 20 second timeout
+      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=15`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
       const data = await response.json();
       if (data && data.ok && Array.isArray(data.result)) {
         for (const update of data.result) {
@@ -1252,7 +1404,8 @@ async function startTelegramBotPolling() {
                     createdAt: Date.now(),
                     status: "open",
                     chatId: chatId,
-                    isRead: false
+                    isRead: false,
+                    source: 'tg'
                   });
 
                   console.log(`Support ticket successfully logged for ${displayName}`);
@@ -1279,7 +1432,9 @@ async function startTelegramBotPolling() {
               continue;
             }
 
-            if (checkText === "👤 Мой Профиль") {
+            if (checkText === "🎮 Играть!") {
+              mappedText = "/play";
+            } else if (checkText === "👤 Мой Профиль") {
               mappedText = "/profile";
             } else if (checkText === "🔑 Код для входа") {
               mappedText = "/code";
@@ -1404,6 +1559,16 @@ async function startTelegramBotPolling() {
                     [
                       { text: "❌ Удалить сообщение", callback_data: "delete_this" },
                       { text: "🧹 Удалить всё", callback_data: "delete_all" }
+                    ]
+                  ]
+                }
+              });
+            } else if (mappedText.toLowerCase() === "/play") {
+              await sendCleanBotMessage(chatId, "🎮 *Погнали играть!*\n\nЗапускай игру прямо сейчас по ссылке:", {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: "🎮 Открыть Игру", url: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app" }
                     ]
                   ]
                 }
@@ -1626,8 +1791,6 @@ async function startTelegramBotPolling() {
 
 // Static files / Vite entry points
 async function start() {
-  app.use(express.json());
-
   // API Telegram Auth Endpoint
   app.post("/api/telegram-auth", async (req, res) => {
     try {
@@ -2010,9 +2173,49 @@ async function start() {
     }
   });
 
+  // GET admin config settings
+  app.get("/api/admin/config", (req, res) => {
+    res.json({
+      masterSheetId,
+      admins
+    });
+  });
+
+  // POST update admin config settings
+  app.post("/api/admin/config", (req, res) => {
+    try {
+      const { masterSheetId: newSheetId, admins: newAdmins } = req.body;
+      
+      if (typeof newSheetId === "string") masterSheetId = newSheetId;
+      if (Array.isArray(newAdmins)) admins = newAdmins;
+      
+      saveConfig();
+      res.json({ success: true, masterSheetId, admins });
+    } catch (err: any) {
+      console.error("Failed to update config:", err);
+      res.status(500).json({ success: false, error: err.message || "Ошибка обновления настроек" });
+    }
+  });
+
   // API Health endpoint
   app.get("/api/health", (req, res) => {
     res.json({ status: "healthy", onlineCount: players.size });
+  });
+
+  app.get("/api/game-status", (req, res) => {
+    res.json({ isRunning: isGameRunning });
+  });
+
+  app.post("/api/game-control", (req, res) => {
+    const { action } = req.body;
+    if (action === "start") {
+      isGameRunning = true;
+    } else if (action === "stop") {
+      isGameRunning = false;
+    } else {
+      return res.status(400).json({ error: "Invalid action" });
+    }
+    res.json({ isRunning: isGameRunning });
   });
 
   // API path to fetch synchronized server time (timestamp)
@@ -2031,7 +2234,6 @@ async function start() {
         "package.json",
         "server.ts",
         "desktop-main.cjs",
-        "start-desktop.bat",
         "УСТАНОВКА_ИГРЫ.bat",
         "start.bat",
         "tsconfig.json",
@@ -2105,8 +2307,14 @@ async function start() {
       console.error("Bot polling routine crashed:", err);
     });
 
+    // Start background polling for VK Bot commands
+    startVkBotPolling().catch((err) => {
+      console.error("VK Bot polling routine crashed:", err);
+    });
+
     // Start background interval for Clan Wars checking and ticking (runs every 1 second)
     setInterval(() => {
+      if (!isGameRunning) return;
       try {
         // 1. Calculate active clan production rates
         const realScores = calculateClanProduction();
