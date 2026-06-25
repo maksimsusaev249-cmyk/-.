@@ -1075,25 +1075,41 @@ export default function App() {
     playerStateRef.current = { playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled };
   });
 
-  // Automatically save on tab close
+  // Automatically save on tab close or app hide
   useEffect(() => {
-    const handleBeforeUnload = () => {
+    const handleUnloadOrHide = () => {
       if (auth.currentUser) {
         // We use the ref to ensure we have the latest save function without adding it to dependencies
-        saveToFirestoreRef.current(auth.currentUser, true, true);
+        saveToFirestoreRef.current(auth.currentUser, false, false);
         if (auth.currentUser.email?.startsWith("vk_")) {
           const state = playerStateRef.current;
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_coins", value: String(state.coins) }).catch(() => {});
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_click_power", value: String(state.clickPowerLevel) }).catch(() => {});
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_auto_clicker", value: String(state.autoClickerLevel) }).catch(() => {});
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_energy_level", value: String(state.energyLevel) }).catch(() => {});
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_total_clicks", value: String(state.totalClicks) }).catch(() => {});
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_player_name", value: state.playerName }).catch(() => {});
+          try {
+            vkBridge.send("VKWebAppStorageSet", { key: "vk_game_coins", value: String(state.coins) });
+            vkBridge.send("VKWebAppStorageSet", { key: "vk_game_click_power", value: String(state.clickPowerLevel) });
+            vkBridge.send("VKWebAppStorageSet", { key: "vk_game_auto_clicker", value: String(state.autoClickerLevel) });
+            vkBridge.send("VKWebAppStorageSet", { key: "vk_game_energy_level", value: String(state.energyLevel) });
+            vkBridge.send("VKWebAppStorageSet", { key: "vk_game_total_clicks", value: String(state.totalClicks) });
+            vkBridge.send("VKWebAppStorageSet", { key: "vk_game_player_name", value: state.playerName });
+          } catch(e) {}
         }
       }
     };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        handleUnloadOrHide();
+      }
+    };
+
+    window.addEventListener("beforeunload", handleUnloadOrHide);
+    window.addEventListener("pagehide", handleUnloadOrHide);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    
+    return () => {
+      window.removeEventListener("beforeunload", handleUnloadOrHide);
+      window.removeEventListener("pagehide", handleUnloadOrHide);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, []);
 
   // --- MULTIPLAYER WEBSOCKET CONNECTIVITY ---
@@ -2755,14 +2771,13 @@ export default function App() {
       if (currentUser?.email?.startsWith("vk_")) {
         const coinsToSave = typeof customCoins === "number" ? customCoins : coins;
         
-        await Promise.all([
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_coins", value: String(coinsToSave) }),
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_click_power", value: String(clickPowerLevel) }),
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_auto_clicker", value: String(autoClickerLevel) }),
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_energy_level", value: String(energyLevel) }),
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_total_clicks", value: String(totalClicks) }),
-          vkBridge.send("VKWebAppStorageSet", { key: "vk_game_player_name", value: playerName })
-        ]);
+        await vkBridge.send("VKWebAppStorageSet", { key: "vk_game_coins", value: String(coinsToSave) });
+        await vkBridge.send("VKWebAppStorageSet", { key: "vk_game_click_power", value: String(clickPowerLevel) });
+        await vkBridge.send("VKWebAppStorageSet", { key: "vk_game_auto_clicker", value: String(autoClickerLevel) });
+        await vkBridge.send("VKWebAppStorageSet", { key: "vk_game_energy_level", value: String(energyLevel) });
+        await vkBridge.send("VKWebAppStorageSet", { key: "vk_game_total_clicks", value: String(totalClicks) });
+        await vkBridge.send("VKWebAppStorageSet", { key: "vk_game_player_name", value: playerName });
+        
         console.log("Progress successfully synchronized with VK Cloud storage.");
       }
     } catch (e) {
@@ -6027,8 +6042,12 @@ export default function App() {
               type="button"
               onClick={async () => {
                 try {
-                  await syncWithVKCloud();
-                  addToast("☁️ Резервная копия успешно создана в Облаке VK!");
+                  if (currentUser) {
+                    await saveToFirestoreRef.current(currentUser, true);
+                  } else {
+                    await syncWithVKCloud();
+                    addToast("☁️ Резервная копия успешно создана в Облаке VK!");
+                  }
                 } catch(e) {
                   addToast("❌ Ошибка синхронизации с VK Облаком");
                 }
