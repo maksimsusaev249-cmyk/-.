@@ -467,7 +467,7 @@ wss.on("connection", (ws: WebSocket) => {
       
       switch (event.type) {
         case "register": {
-          const { id, name, clan, coins, clicks, color, telegramId, autoClickerLevel, email } = event.data;
+          const { id, name, clan, coins, clicks, color, telegramId, autoClickerLevel, email, whitelistApproved } = event.data;
           
           const proceedRegistration = () => {
             // If the socket was previously attached to a different ID (like a guest ID), remove it to prevent duplicates
@@ -525,7 +525,7 @@ wss.on("connection", (ws: WebSocket) => {
           };
 
           // Google Sheets Whitelist Verification
-          if (masterSheetId) {
+          if (masterSheetId && !whitelistApproved) {
             getGoogleSheetValues(masterSheetId, 'Sheet1!A1:Z550').then((values) => {
               if (values) {
                 const flatValues = values.flat().filter(Boolean).map(v => String(v).trim().toLowerCase());
@@ -1020,6 +1020,8 @@ const VK_GROUP_ID = process.env.VK_GROUP_ID || "";
 const CONFIG_FILE = path.join(process.cwd(), "sheet_config.json");
 let masterSheetId = "";
 let admins: string[] = [];
+let whitelistEnabled: boolean = true;
+let whitelistCodes: string[] = ["777777", "123456", "000000", "111111", "999999", "666666", "222222", "333333"];
 
 function loadConfig() {
   try {
@@ -1027,6 +1029,12 @@ function loadConfig() {
       const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
       masterSheetId = data.masterSheetId || "";
       admins = data.admins || [];
+      if (typeof data.whitelistEnabled === "boolean") {
+        whitelistEnabled = data.whitelistEnabled;
+      }
+      if (data.whitelistCodes && Array.isArray(data.whitelistCodes)) {
+        whitelistCodes = data.whitelistCodes;
+      }
     }
   } catch (e) {
     console.error("Failed to read sheet config:", e);
@@ -1037,7 +1045,7 @@ function saveConfig() {
   try {
     fs.writeFileSync(
       CONFIG_FILE,
-      JSON.stringify({ masterSheetId, admins }, null, 2),
+      JSON.stringify({ masterSheetId, admins, whitelistEnabled, whitelistCodes }, null, 2),
       "utf8"
     );
   } catch (e) {
@@ -2301,20 +2309,42 @@ async function start() {
   app.get("/api/admin/config", (req, res) => {
     res.json({
       masterSheetId,
-      admins
+      admins,
+      whitelistEnabled,
+      whitelistCodes
     });
+  });
+
+  // Verify whitelist code
+  app.post("/api/whitelist/verify", (req, res) => {
+    const { code } = req.body;
+    if (!whitelistEnabled) {
+      return res.json({ success: true, valid: true });
+    }
+    if (whitelistCodes.includes(code)) {
+      res.json({ success: true, valid: true });
+    } else {
+      res.json({ success: true, valid: false });
+    }
+  });
+
+  // Get whitelist status
+  app.get("/api/whitelist/status", (req, res) => {
+    res.json({ enabled: whitelistEnabled });
   });
 
   // POST update admin config settings
   app.post("/api/admin/config", (req, res) => {
     try {
-      const { masterSheetId: newSheetId, admins: newAdmins } = req.body;
+      const { masterSheetId: newSheetId, admins: newAdmins, whitelistEnabled: newWhitelistEnabled, whitelistCodes: newWhitelistCodes } = req.body;
       
       if (typeof newSheetId === "string") masterSheetId = newSheetId;
       if (Array.isArray(newAdmins)) admins = newAdmins;
+      if (typeof newWhitelistEnabled === "boolean") whitelistEnabled = newWhitelistEnabled;
+      if (Array.isArray(newWhitelistCodes)) whitelistCodes = newWhitelistCodes;
       
       saveConfig();
-      res.json({ success: true, masterSheetId, admins });
+      res.json({ success: true, masterSheetId, admins, whitelistEnabled, whitelistCodes });
     } catch (err: any) {
       console.error("Failed to update config:", err);
       res.status(500).json({ success: false, error: err.message || "Ошибка обновления настроек" });

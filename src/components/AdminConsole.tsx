@@ -67,6 +67,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
   const [cfgSheetId, setCfgSheetId] = useState("");
   const [cfgVkSecureKey, setCfgVkSecureKey] = useState("");
   const [cfgVkServiceKey, setCfgVkServiceKey] = useState("");
+  const [whitelistEnabled, setWhitelistEnabled] = useState(true);
+  const [whitelistCodes, setWhitelistCodes] = useState("");
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Support section UI states
@@ -98,6 +100,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
         setCfgSheetId(data.masterSheetId || "");
         setCfgVkSecureKey(data.vkSecureKey || "");
         setCfgVkServiceKey(data.vkServiceKey || "");
+        setWhitelistEnabled(typeof data.whitelistEnabled === "boolean" ? data.whitelistEnabled : true);
+        setWhitelistCodes(data.whitelistCodes?.join(", ") || "");
       }
     } catch (e) {
       console.error("Failed to fetch admin config keys", e);
@@ -107,6 +111,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
   const handleSaveConfig = async () => {
     setIsSavingConfig(true);
     try {
+      const parsedWhitelist = whitelistCodes.split(",").map(s => s.trim()).filter(Boolean);
       const res = await fetch(getApiUrl("/api/admin/config"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -114,6 +119,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
           masterSheetId: cfgSheetId.trim(),
           vkSecureKey: cfgVkSecureKey.trim(),
           vkServiceKey: cfgVkServiceKey.trim(),
+          whitelistEnabled,
+          whitelistCodes: parsedWhitelist
         }),
       });
       if (res.ok) {
@@ -122,6 +129,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
         setCfgSheetId(data.masterSheetId || "");
         setCfgVkSecureKey(data.vkSecureKey || "");
         setCfgVkServiceKey(data.vkServiceKey || "");
+        setWhitelistEnabled(typeof data.whitelistEnabled === "boolean" ? data.whitelistEnabled : true);
+        setWhitelistCodes(data.whitelistCodes?.join(", ") || "");
       } else {
         const err = await res.json().catch(() => ({}));
         addToast(`❌ Сбой при сохранении: ${err.error || "ошибка сети"}`);
@@ -1558,6 +1567,36 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                       <span className="text-[10px] text-gray-500 font-mono mt-0.5">
                         Защищенный ключ приложения ВКонтакте (используется для верификации подписей параметров запуска).
                       </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                          🛡️ Белый Список
+                        </label>
+                        <button
+                          onClick={() => setWhitelistEnabled(!whitelistEnabled)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border-none outline-none cursor-pointer ${
+                            whitelistEnabled ? "bg-emerald-600 text-white" : "bg-red-500/20 text-red-400"
+                          }`}
+                        >
+                          {whitelistEnabled ? "ВКЛЮЧЕН" : "ВЫКЛЮЧЕН"}
+                        </button>
+                      </div>
+                      
+                      {whitelistEnabled && (
+                        <>
+                          <textarea 
+                            placeholder="777777, 123456, 000000..."
+                            value={whitelistCodes}
+                            onChange={(e) => setWhitelistCodes(e.target.value)}
+                            className="bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors min-h-[80px] mt-2"
+                          />
+                          <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                            Разрешенные коды для прохождения белого списка новыми VK/TG игроками.
+                          </span>
+                        </>
+                      )}
                     </div>
 
                     <div className="h-px bg-white/5 my-3" />

@@ -946,6 +946,11 @@ export default function App() {
     const saved = localStorage.getItem("gameLiquidGlass");
     return saved ? JSON.parse(saved) : false;
   });
+
+  // Whitelist / Invite System
+  const [isWhitelistApproved, setIsWhitelistApproved] = useState<boolean>(true);
+  const [whitelistCodeInput, setWhitelistCodeInput] = useState("");
+  const [isCheckingWhitelist, setIsCheckingWhitelist] = useState(false);
   const [hasUnreadChat, setHasUnreadChat] = useState(false);
   const [swapPlayerId, setSwapPlayerId] = useState("");
 
@@ -1069,10 +1074,10 @@ export default function App() {
   }, [coins, clickPowerLevel, autoClickerLevel, energyLevel, energy, maxEnergy, regenRate, totalClicks, playerName, playerPhotoURL, playerClan, currentQuest, friendsList, currentUser, linkedTelegramId]);
 
   const saveToFirestoreRef = useRef<any>(null);
-  const playerStateRef = useRef({ playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled });
+  const playerStateRef = useRef({ playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled, isWhitelistApproved });
   useEffect(() => {
     saveToFirestoreRef.current = saveToFirestore;
-    playerStateRef.current = { playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled };
+    playerStateRef.current = { playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled, isWhitelistApproved };
   });
 
   // Automatically save on tab close or app hide
@@ -1154,7 +1159,8 @@ export default function App() {
               color: state.playerColor,
               telegramId: tgId || undefined,
               autoClickerLevel: state.autoClickerLevel,
-              email: currentUser?.email || undefined
+              email: currentUser?.email || undefined,
+              whitelistApproved: state.isWhitelistApproved
             }
           }));
 
@@ -1835,6 +1841,32 @@ export default function App() {
           
           if (docSnap && docSnap.exists()) {
             const data = docSnap.data();
+            
+            // Check whitelist if they are a VK or TG user
+            if (user.email?.startsWith("vk_") || user.email?.startsWith("tg_")) {
+              if (data.whitelistApproved === true) {
+                setIsWhitelistApproved(true);
+              } else {
+                try {
+                  const wlRes = await fetch(getApiUrl("/api/whitelist/status"));
+                  if (wlRes.ok) {
+                    const wlData = await wlRes.json();
+                    if (!wlData.enabled) {
+                      setIsWhitelistApproved(true);
+                    } else {
+                      setIsWhitelistApproved(false);
+                    }
+                  } else {
+                    setIsWhitelistApproved(false);
+                  }
+                } catch (e) {
+                  setIsWhitelistApproved(false);
+                }
+              }
+            } else {
+              setIsWhitelistApproved(true);
+            }
+
             const loadedCoins = typeof data.coins === "number" ? data.coins : 0;
             const loadedAutoLvl = typeof data.autoClickerLevel === "number" ? data.autoClickerLevel : 0;
             const lastActive = typeof data.lastActiveTimestamp === "number" ? data.lastActiveTimestamp : 0;
@@ -1979,6 +2011,27 @@ export default function App() {
               setPlayerPhotoURL(user.photoURL);
             }
 
+            let isApproved = true;
+            // For new VK or TG users, require whitelist approval if enabled
+            if (user.email?.startsWith("vk_") || user.email?.startsWith("tg_")) {
+              try {
+                const wlRes = await fetch(getApiUrl("/api/whitelist/status"));
+                if (wlRes.ok) {
+                  const wlData = await wlRes.json();
+                  isApproved = !wlData.enabled;
+                  setIsWhitelistApproved(isApproved);
+                } else {
+                  isApproved = false;
+                  setIsWhitelistApproved(false);
+                }
+              } catch (e) {
+                isApproved = false;
+                setIsWhitelistApproved(false);
+              }
+            } else {
+              setIsWhitelistApproved(true);
+            }
+
             await setDoc(docRef, {
               coins: finalCoins,
               clickPowerLevel: finalClickPower,
@@ -1994,6 +2047,7 @@ export default function App() {
               levelItems,
               currentQuest,
               notificationsEnabled: true,
+              whitelistApproved: isApproved,
               ...(tgId ? { telegramId: tgId } : {}),
               updatedAt: serverTimestamp()
             });
@@ -2498,18 +2552,6 @@ export default function App() {
               const docRef = doc(db, "users", currentUser.uid);
               await setDoc(docRef, { telegramId: tgId, updatedAt: serverTimestamp() }, { merge: true });
               addToast("🎉 Telegram успешно привязан к вашему аккаунту!");
-              
-              // Notify the bot the link was successful
-              fetch(getApiUrl("/api/telegram-notify-save"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  telegramId: tgId,
-                  playerName: playerName,
-                  coins: coins,
-                  notificationsEnabled: notificationsEnabled
-                })
-              }).catch(err => console.error("Failed to notify tg of merge linking:", err));
             } else if (data.email && data.password) {
               await performTelegramAuth(data.email, data.password, data.displayName || "", data.photoURL || "");
             }
@@ -5506,7 +5548,7 @@ export default function App() {
 
   const renderSettingsContent = () => {
     return (
-      <div className="flex flex-col h-full min-h-0 text-white gap-4 font-sans select-none">
+      <div className="flex flex-col h-full min-h-0 text-white gap-4 font-sans select-none overflow-y-auto pb-4 pr-1 scrollbar-none">
         
         {/* Google & Telegram Authentication Section */}
         <div className="flex flex-col gap-3 bg-black/20 p-4 rounded-2xl border border-white/5">
@@ -6123,6 +6165,85 @@ export default function App() {
     );
   }
 
+  if (currentUser && !isWhitelistApproved && !isWhitelistedRejected) {
+    return (
+      <div className="min-h-[100dvh] w-screen flex flex-col items-center justify-center bg-[#060914] text-white p-6 font-sans relative overflow-hidden">
+        <div className="absolute top-[-10%] right-[-5%] w-[400px] h-[400px] bg-rose-500/5 rounded-full blur-[100px] animate-pulse"></div>
+        <div className="absolute bottom-[-10%] left-[-5%] w-[400px] h-[400px] bg-blue-500/5 rounded-full blur-[100px] animate-pulse"></div>
+
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col gap-6 items-center p-8 bg-[#0a0f1e] rounded-[32px] border border-white/5 shadow-2xl max-w-sm w-full relative z-10"
+        >
+          <div className="w-20 h-20 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 text-4xl shadow-[0_0_30px_rgba(225,29,72,0.2)] mb-2 animate-pulse">
+            🔑
+          </div>
+          <div className="flex flex-col items-center gap-3 w-full text-center">
+            <h2 className="text-2xl font-black text-rose-500 tracking-tight uppercase">Доступ ограничен</h2>
+            <p className="text-[12px] text-gray-400 font-medium leading-relaxed">
+              Администратор включил Белый Список. Пожалуйста, введите код подтверждения.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-4 w-full mt-2">
+            <input 
+              type="text" 
+              maxLength={20}
+              value={whitelistCodeInput}
+              onChange={(e) => setWhitelistCodeInput(e.target.value)}
+              placeholder="КОД..."
+              className="w-full py-4 px-6 bg-black/40 text-white text-center tracking-widest text-2xl font-mono font-bold border border-white/10 rounded-2xl outline-none focus:border-rose-500/50 transition-all placeholder:text-gray-700"
+            />
+            
+            <button 
+              onClick={async () => {
+                setIsCheckingWhitelist(true);
+                try {
+                  const res = await fetch(getApiUrl("/api/whitelist/verify"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ code: whitelistCodeInput })
+                  });
+                  const data = await res.json();
+                  if (data.success && data.valid) {
+                    setIsWhitelistApproved(true);
+                    try {
+                      const docRef = doc(db, "users", currentUser.uid);
+                      await setDoc(docRef, { whitelistApproved: true, updatedAt: serverTimestamp() }, { merge: true });
+                      addToast("✅ Доступ разрешен! Добро пожаловать.");
+                    } catch(e) {}
+                  } else {
+                    addToast("❌ Неверный код подтверждения!");
+                    setWhitelistCodeInput("");
+                  }
+                } catch(e) {
+                  addToast("❌ Ошибка сервера при проверке кода!");
+                  setWhitelistCodeInput("");
+                }
+                setIsCheckingWhitelist(false);
+              }}
+              disabled={whitelistCodeInput.length === 0 || isCheckingWhitelist}
+              className="w-full py-4 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 active:scale-[0.98] text-white rounded-2xl text-sm font-black transition-all shadow-lg disabled:opacity-50 cursor-pointer border-none uppercase tracking-wider"
+            >
+              {isCheckingWhitelist ? "ПРОВЕРКА..." : "ПОДТВЕРДИТЬ"}
+            </button>
+            <button
+              onClick={() => {
+                signOut(auth);
+                setCurrentUser(null);
+                setLinkedTelegramId(null);
+              }}
+              className="w-full py-3 bg-transparent text-gray-500 text-xs font-bold transition-all hover:text-white cursor-pointer border-none outline-none mt-1"
+            >
+              Выйти из аккаунта
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
       <>
@@ -6689,7 +6810,7 @@ export default function App() {
 
   return (
     <div 
-      className={`text-white font-sans flex items-center justify-center transition-all duration-300 relative overflow-hidden select-none ${
+      className={`text-white font-sans flex items-center justify-center relative overflow-hidden select-none overscroll-none touch-manipulation ${
         appVersion === "pc" ? "p-4 w-screen h-screen md:p-8" : "p-2 w-screen h-[100dvh] pb-4"
       }`}
       style={{
@@ -6753,7 +6874,7 @@ export default function App() {
       {/* Primary container */}
       <div 
         id="gameContainer" 
-        className={`w-full transition-all duration-500 relative overflow-hidden flex flex-col z-10 ${
+        className={`w-full transition-colors relative overflow-hidden flex flex-col z-10 ${
           appVersion === "pc" 
             ? "max-w-[1240px] h-[92vh] max-h-[820px] p-6" 
             : "max-w-[430px] h-[94vh] max-h-[840px] p-4.5"
@@ -6851,7 +6972,7 @@ export default function App() {
             {/* Right Column: Tab screen and docked nav */}
             <div className="flex-1 flex flex-col gap-4 min-w-0 h-full justify-between">
               {/* Content Panel */}
-              <div className="flex-1 min-h-0 overflow-y-auto bg-black/25 rounded-[22px] p-4.5 border border-white/5 shadow-inner relative flex flex-col">
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-black/25 rounded-[22px] p-4.5 border border-white/5 shadow-inner relative flex flex-col">
                 {activeTabContentSection}
               </div>
 
@@ -6862,7 +6983,7 @@ export default function App() {
         ) : (
           <div className="flex flex-col h-full min-h-0 overflow-hidden pt-3 justify-between">
             {/* Scrollable area for all game metrics and tabs, preserving original spacious scale */}
-            <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 pb-3 scrollbar-none min-h-0">
+            <div className="flex-1 overflow-y-auto overscroll-contain flex flex-col gap-4 pr-1 pb-3 scrollbar-none min-h-0">
               {profileSection}
               {energySection}
               {scoreSection}
