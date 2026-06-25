@@ -23,24 +23,51 @@ async function appendToGoogleSheet(spreadsheetId: string, values: any[]) {
     console.log(`Skipping append: "${spreadsheetId}" is not a valid Google Spreadsheet ID.`);
     return;
   }
-  try {
-    const auth = new google.auth.GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-    const authClient = await auth.getClient();
-    const sheets = google.sheets({ version: 'v4', auth: authClient as any });
+  const auth = new google.auth.GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+  const authClient = await auth.getClient();
+  const sheets = google.sheets({ version: 'v4', auth: authClient as any });
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'Sheet1!A1',
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [values],
-      },
-    });
+  const currentYear = new Date().getFullYear().toString();
+  let targetSheetName = currentYear;
+
+  try {
+    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+    const existingSheet = sheetMeta.data.sheets?.find(s => s.properties?.title === currentYear);
+    
+    if (!existingSheet) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [{
+            addSheet: {
+              properties: {
+                title: currentYear
+              }
+            }
+          }]
+        }
+      });
+    }
   } catch (err: any) {
-    console.error(`Failed to append to Google Sheet (${spreadsheetId}):`, err.message || err);
+    console.error("Failed to ensure year sheet exists, falling back to first sheet:", err.message);
+    try {
+      const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+      targetSheetName = sheetMeta.data.sheets?.[0]?.properties?.title || 'Sheet1';
+    } catch(e) {
+      targetSheetName = 'Sheet1';
+    }
   }
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${targetSheetName}'!A1`,
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [values],
+    },
+  });
 }
 
 async function getGoogleSheetValues(spreadsheetId: string, range: string): Promise<any[][] | null> {
@@ -54,9 +81,19 @@ async function getGoogleSheetValues(spreadsheetId: string, range: string): Promi
     });
     const authClient = await auth.getClient();
     const sheets = google.sheets({ version: 'v4', auth: authClient as any });
+    
+    let finalRange = range;
+    if (range.startsWith('Sheet1!')) {
+      const currentYear = new Date().getFullYear().toString();
+      const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+      const existingSheet = sheetMeta.data.sheets?.find(s => s.properties?.title === currentYear);
+      const targetSheetName = existingSheet ? currentYear : (sheetMeta.data.sheets?.[0]?.properties?.title || 'Sheet1');
+      finalRange = range.replace('Sheet1!', `'${targetSheetName}'!`);
+    }
+
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range,
+      range: finalRange,
     });
     return res.data.values || null;
   } catch (err: any) {
@@ -1018,8 +1055,9 @@ const VK_BOT_TOKEN = process.env.VK_BOT_TOKEN || "";
 const VK_GROUP_ID = process.env.VK_GROUP_ID || "";
 
 const CONFIG_FILE = path.join(process.cwd(), "sheet_config.json");
-let masterSheetId = "";
+let masterSheetId = "1p0G1C7BSjbIJKlDZgykDpRrMK4vg1hqoMC2pTKZwcoQ";
 let admins: string[] = [];
+let moderators: string[] = [];
 let whitelistEnabled: boolean = true;
 let whitelistCodes: string[] = ["777777", "123456", "000000", "111111", "999999", "666666", "222222", "333333"];
 
@@ -1027,8 +1065,9 @@ function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-      masterSheetId = data.masterSheetId || "";
+      masterSheetId = data.masterSheetId || "1p0G1C7BSjbIJKlDZgykDpRrMK4vg1hqoMC2pTKZwcoQ";
       admins = data.admins || [];
+      moderators = data.moderators || [];
       if (typeof data.whitelistEnabled === "boolean") {
         whitelistEnabled = data.whitelistEnabled;
       }
@@ -1045,7 +1084,7 @@ function saveConfig() {
   try {
     fs.writeFileSync(
       CONFIG_FILE,
-      JSON.stringify({ masterSheetId, admins, whitelistEnabled, whitelistCodes }, null, 2),
+      JSON.stringify({ masterSheetId, admins, moderators, whitelistEnabled, whitelistCodes }, null, 2),
       "utf8"
     );
   } catch (e) {
@@ -1120,8 +1159,96 @@ interface BotChatState {
   lastNotificationText?: string;
   supportMode?: boolean;
   supportDraft?: string[];
+  keyboardPage?: number;
 }
 const botChatStates = new Map<number, BotChatState>();
+
+async function getBotChatState(chatId: number): Promise<BotChatState> {
+  let state = botChatStates.get(chatId);
+  if (state) {
+    if (!state.sentMessageIds || !Array.isArray(state.sentMessageIds)) {
+      state.sentMessageIds = [];
+    }
+    return state;
+  }
+  try {
+    const dbInstance = await getAuthenticatedDb();
+    if (dbInstance) {
+      const docRef = doc(dbInstance, "bot_chat_states", String(chatId));
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data() as BotChatState;
+        if (!data.sentMessageIds || !Array.isArray(data.sentMessageIds)) {
+          data.sentMessageIds = [];
+        }
+        botChatStates.set(chatId, data);
+        return data;
+      }
+    }
+  } catch (err) {
+    console.error("Error loading bot chat state from Firestore:", err);
+  }
+  const newState: BotChatState = { sentMessageIds: [] };
+  botChatStates.set(chatId, newState);
+  return newState;
+}
+
+async function saveBotChatState(chatId: number, state: BotChatState) {
+  botChatStates.set(chatId, state);
+  try {
+    const dbInstance = await getAuthenticatedDb();
+    if (dbInstance) {
+      const docRef = doc(dbInstance, "bot_chat_states", String(chatId));
+      await setDoc(docRef, state, { merge: true });
+    }
+  } catch (err) {
+    console.error("Error saving bot chat state to Firestore:", err);
+  }
+}
+
+function isStaff(chatId: string | number): boolean {
+  const sId = String(chatId);
+  return admins.includes(sId) || moderators.includes(sId);
+}
+
+function getKeyboardForUser(chatId: number, page: number = 1) {
+  if (!isStaff(chatId)) {
+    return {
+      keyboard: [
+        [{ text: "🎮 Играть!" }],
+        [{ text: "👤 Мой Профиль" }, { text: "💾 Сохранить прогресс" }],
+        [{ text: "🔑 Код для входа" }, { text: "🔔 Последнее уведомление" }],
+        [{ text: "🧹 Очистить чат" }, { text: "💬 Поддержка" }],
+        [{ text: "📊 Таблица" }, { text: "❓ Справка" }]
+      ],
+      resize_keyboard: true
+    };
+  }
+
+  if (page === 2) {
+    return {
+      keyboard: [
+        [{ text: "👥 Персонал" }, { text: "➕ Добавить админа" }],
+        [{ text: "🛠️ Добавить модера" }, { text: "➖ Исключить кого-то" }],
+        [{ text: "⚙️ Настройки Таблицы" }],
+        [{ text: "⬅️ Игрок-Меню (Стр. 1)" }]
+      ],
+      resize_keyboard: true
+    };
+  }
+
+  return {
+    keyboard: [
+      [{ text: "🎮 Играть!" }],
+      [{ text: "👤 Мой Профиль" }, { text: "💾 Сохранить прогресс" }],
+      [{ text: "🔑 Код для входа" }, { text: "🔔 Последнее уведомление" }],
+      [{ text: "🧹 Очистить чат" }, { text: "💬 Поддержка" }],
+      [{ text: "📊 Таблица" }, { text: "❓ Справка" }],
+      [{ text: "➡️ Админ-Меню (Стр. 2)" }]
+    ],
+    resize_keyboard: true
+  };
+}
 
 // Default application layout custom main menu keyboard
 const DEFAULT_KEYBOARD = {
@@ -1142,6 +1269,7 @@ const DEFAULT_KEYBOARD = {
       { text: "💬 Поддержка" }
     ],
     [
+      { text: "📊 Таблица" },
       { text: "❓ Справка" }
     ]
   ],
@@ -1159,11 +1287,19 @@ async function deleteMessageSafe(chatId: number, messageId: number) {
       })
     });
     // Remove from in-memory tracking as well
-    const state = botChatStates.get(chatId);
-    if (state && state.sentMessageIds) {
-      state.sentMessageIds = state.sentMessageIds.filter(id => id !== messageId);
+    const state = await getBotChatState(chatId);
+    if (state) {
+      let changed = false;
+      if (state.sentMessageIds && state.sentMessageIds.includes(messageId)) {
+        state.sentMessageIds = state.sentMessageIds.filter(id => id !== messageId);
+        changed = true;
+      }
       if (state.lastBotMessageId === messageId) {
         delete state.lastBotMessageId;
+        changed = true;
+      }
+      if (changed) {
+        await saveBotChatState(chatId, state);
       }
     }
   } catch (err) {
@@ -1172,7 +1308,7 @@ async function deleteMessageSafe(chatId: number, messageId: number) {
 }
 
 async function sendCleanBotMessage(chatId: number, text: string, options: any = {}): Promise<any> {
-  const state = botChatStates.get(chatId) || { sentMessageIds: [] };
+  const state = await getBotChatState(chatId);
   if (!state.sentMessageIds) {
     state.sentMessageIds = [];
   }
@@ -1189,7 +1325,11 @@ async function sendCleanBotMessage(chatId: number, text: string, options: any = 
   }
 
   // Default to standard main menu keyboard if no customized reply_markup is passed in
-  const finalReplyMarkup = options.reply_markup !== undefined ? options.reply_markup : DEFAULT_KEYBOARD;
+  let finalReplyMarkup = options.reply_markup;
+  if (finalReplyMarkup === undefined || finalReplyMarkup === DEFAULT_KEYBOARD) {
+    const page = state.keyboardPage || 1;
+    finalReplyMarkup = getKeyboardForUser(chatId, page);
+  }
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -1212,7 +1352,7 @@ async function sendCleanBotMessage(chatId: number, text: string, options: any = 
       if (!state.sentMessageIds.includes(messageId)) {
         state.sentMessageIds.push(messageId);
       }
-      botChatStates.set(chatId, state);
+      await saveBotChatState(chatId, state);
       return json;
     }
   } catch (err) {
@@ -1290,6 +1430,7 @@ async function startVkBotPolling() {
             else if (text === "🧹 Очистить чат") mappedText = "/clear_chat";
             else if (text === "💬 Поддержка") mappedText = "/support";
             else if (text === "❓ Справка") mappedText = "/aide";
+            else if (text === "📊 Таблица" || text.toLowerCase() === "таблица") mappedText = "/table";
 
             const upperMappedText = mappedText.toUpperCase();
             let potentialCode = "";
@@ -1335,6 +1476,30 @@ async function startVkBotPolling() {
               await sendVkMessage(peer_id, "🎮 *Погнали играть!*\n\nЗапускай игру прямо сейчас по ссылке:", { keyboard: inlineKbd });
             } else if (mappedText.toLowerCase() === "/clear_chat") {
               await sendVkMessage(peer_id, "🧹 *История чата очищена (визуально для бота)!*");
+            } else if (mappedText.toLowerCase() === "/table" || mappedText.toLowerCase() === "/sheet" || mappedText.toLowerCase() === "таблица") {
+              if (masterSheetId) {
+                let sheetTabs: string[] = [];
+                try {
+                  const auth = new google.auth.GoogleAuth({
+                    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+                  });
+                  const authClient = await auth.getClient();
+                  const sheets = google.sheets({ version: 'v4', auth: authClient as any });
+                  const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: masterSheetId });
+                  sheetTabs = sheetMeta.data.sheets?.map(s => s.properties?.title || '').filter(Boolean) || [];
+                } catch (e: any) {
+                  console.error("Failed to fetch sheet tabs in VK:", e.message || e);
+                }
+
+                const sheetLink = `https://docs.google.com/spreadsheets/d/${masterSheetId}/edit`;
+                let tabMsg = "";
+                if (sheetTabs.length > 0) {
+                  tabMsg = "\n\n📂 Доступные листы (вкладки по годам):\n" + sheetTabs.map(tab => `• 📅 ${tab} год`).join("\n");
+                }
+                await sendVkMessage(peer_id, `📊 *Google Таблицы*\n\nПерейдите по ссылке ниже, чтобы просмотреть таблицу по годам или заполнить её вручную:${tabMsg}\n\n👉 ${sheetLink}`);
+              } else {
+                await sendVkMessage(peer_id, "⚠️ Google Таблица еще не подключена администратором.");
+              }
             }
             // Убираем фоллбэк (else). Если сервер не узнал команду, он просто промолчит,
             // а сообщение подхватит и обработает VK CXhub (например, FAQ или воронка).
@@ -1455,16 +1620,15 @@ async function startTelegramBotPolling() {
               if (callbackData === "delete_this") {
                 await deleteMessageSafe(chatId, messageId);
               } else if (callbackData === "delete_all") {
-                const state = botChatStates.get(chatId);
+                const state = await getBotChatState(chatId);
                 if (state && state.sentMessageIds) {
                   const idsToDelete = [...state.sentMessageIds];
                   state.sentMessageIds = [];
-                  for (const id of idsToDelete) {
-                    await deleteMessageSafe(chatId, id);
-                  }
+                  await saveBotChatState(chatId, state);
+                  await Promise.all(idsToDelete.map(id => deleteMessageSafe(chatId, id)));
                 }
               } else if (callbackData === "last_notification") {
-                const state = botChatStates.get(chatId) || {};
+                const state = await getBotChatState(chatId);
                 const lastNots = state.lastNotificationText || "📭 У вас пока нет сохраненных уведомлений.";
                 await sendCleanBotMessage(chatId, `🔔 *Последнее уведомление:*\n\n${lastNots}`, {
                   keepHistory: true,
@@ -1493,15 +1657,12 @@ async function startTelegramBotPolling() {
             // Translate Keyboard Custom Button clicks back into standard commands
             let mappedText = text;
             const checkText = text.trim();
-            let state = botChatStates.get(chatId);
-            if (!state) {
-              state = { sentMessageIds: [] };
-              botChatStates.set(chatId, state);
-            }
+            let state = await getBotChatState(chatId);
             
             if (checkText === "❌ Отмена") {
               state.supportMode = false;
               state.supportDraft = [];
+              await saveBotChatState(chatId, state);
               await sendCleanBotMessage(chatId, "❌ *Обращение в поддержку отменено.*", {
                 reply_markup: DEFAULT_KEYBOARD
               });
@@ -1580,6 +1741,22 @@ async function startTelegramBotPolling() {
               mappedText = "/support";
             } else if (checkText === "❓ Справка") {
               mappedText = "/aide";
+            } else if (checkText === "📊 Таблица" || checkText.toLowerCase() === "таблица") {
+              mappedText = "/table";
+            } else if (checkText === "➡️ Админ-Меню (Стр. 2)") {
+              mappedText = "/admin_page2";
+            } else if (checkText === "⬅️ Игрок-Меню (Стр. 1)") {
+              mappedText = "/player_page1";
+            } else if (checkText === "👥 Персонал") {
+              mappedText = "/staff";
+            } else if (checkText === "➕ Добавить админа") {
+              mappedText = "/prompt_add_admin";
+            } else if (checkText === "🛠️ Добавить модера") {
+              mappedText = "/prompt_add_mod";
+            } else if (checkText === "➖ Исключить кого-то") {
+              mappedText = "/prompt_exclude";
+            } else if (checkText === "⚙️ Настройки Таблицы") {
+              mappedText = "/prompt_table";
             }
 
             const upperMappedText = mappedText.toUpperCase();
@@ -1676,13 +1853,14 @@ async function startTelegramBotPolling() {
               });
 
               const welcomeName = from.first_name || "Игрок";
-              const codeMessage = `👋 *Привет, ${welcomeName}!* ✨\n\n🎮 Чтобы мгновенно связать ваш игровой профиль и включить уведомления, откройте игру на сайте и нажмите кнопку **«Подключить Telegram»**!\n\n🔑 Или используйте этот одноразовый код для входа на сайте:\n👉 \`${code}\` 👈\n\n🎮 *Удачной игры!*`;
+              const userTgId = String(from.id);
+              const codeMessage = `👋 *Привет, ${welcomeName}!* ✨\n\n📌 Ваш Telegram ID: \`${userTgId}\` *(нажмите, чтобы скопировать)*\n\n🎮 Чтобы мгновенно связать ваш игровой профиль и включить уведомления, откройте игру на сайте и нажмите кнопку **«Подключить Telegram»**!\n\n🔑 Или используйте этот одноразовый код для входа на сайте:\n👉 \`${code}\` 👈\n\n🎮 *Удачной игры!*`;
 
               await sendCleanBotMessage(chatId, codeMessage, {
                 reply_markup: DEFAULT_KEYBOARD
               });
             } else if (mappedText.toLowerCase() === "/last_notification" || mappedText.toLowerCase() === "/last") {
-              const state = botChatStates.get(chatId) || {};
+              const state = await getBotChatState(chatId);
               const lastNots = state.lastNotificationText || "📭 У вас пока нет сохраненных уведомлений.";
               await sendCleanBotMessage(chatId, `🔔 *Последнее уведомление:*\n\n${lastNots}`, {
                 keepHistory: true,
@@ -1706,13 +1884,12 @@ async function startTelegramBotPolling() {
                 }
               });
             } else if (mappedText.toLowerCase() === "/clear_chat" || mappedText.toLowerCase() === "/clear") {
-              const state = botChatStates.get(chatId);
+              const state = await getBotChatState(chatId);
               if (state && state.sentMessageIds) {
                 const idsToDelete = [...state.sentMessageIds];
                 state.sentMessageIds = [];
-                for (const id of idsToDelete) {
-                  await deleteMessageSafe(chatId, id);
-                }
+                await saveBotChatState(chatId, state);
+                await Promise.all(idsToDelete.map(id => deleteMessageSafe(chatId, id)));
               }
               await sendCleanBotMessage(chatId, "🧹 *История уведомлений и чата бота успешно очищена!* ", {
                 reply_markup: DEFAULT_KEYBOARD
@@ -1720,6 +1897,7 @@ async function startTelegramBotPolling() {
             } else if (mappedText.toLowerCase() === "/support") {
               state.supportMode = true;
               state.supportDraft = [];
+              await saveBotChatState(chatId, state);
               const msg = `💬 *Служба поддержки*\n\nНапишите ниже текст вашего обращения к администрации 👇`;
               await sendCleanBotMessage(chatId, msg, {
                 reply_markup: {
@@ -1789,8 +1967,48 @@ async function startTelegramBotPolling() {
 
               await sendCleanBotMessage(chatId, msg);
             } else if (mappedText.toLowerCase() === "/aide" || mappedText.toLowerCase() === "aide" || mappedText.toLowerCase() === "/help") {
-              const msg = `📚 *Справка по боту*\n\n/start - Регистрация или получение кода для входа\n/save - Сохранить игровой прогресс вручную\n/aide - Показать эту справку\n\n📋 *Команды Google Таблицы:*\n✍️ Просто напишите свое *имя* или *логин* (или команду \`/add имя\`), чтобы занести ваши игровые данные в общую Google Таблицу!\n\n🔧 *Для Администраторов:*\n⚙️ \`/set_table <id_таблицы>\` - Задать ID общей Google Таблицы\n➕ \`/add_admin <tg_id>\` - Назначить админа\n✏️ Напишите любое имя/логин игрока, чтобы добавить его в таблицу без ограничений!`;
+              const msg = `📚 *Справка по боту*\n\n/start - Регистрация или получение кода для входа\n/save - Сохранить игровой прогресс вручную\n/table - Получить ссылку на Google Таблицу\n/aide - Показать эту справку\n\n📋 *Команды Google Таблицы:*\n✍️ Просто напишите свое *имя* или *логин* (или команду \`/add имя\`), чтобы занести ваши игровые данные в общую Google Таблицу!\n\n🔧 *Для Администраторов:*\n⚙️ \`/set_table <id_таблицы>\` - Задать ID общей Google Таблицы\n➕ \`/add_admin <tg_id>\` - Назначить админа\n✏️ Напишите любое имя/логин игрока, чтобы добавить его в таблицу без ограничений!`;
               await sendCleanBotMessage(chatId, msg);
+            } else if (mappedText.toLowerCase() === "/table" || mappedText.toLowerCase() === "/sheet" || mappedText.toLowerCase() === "таблица") {
+              if (masterSheetId) {
+                let sheetTabs: string[] = [];
+                try {
+                  const auth = new google.auth.GoogleAuth({
+                    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+                  });
+                  const authClient = await auth.getClient();
+                  const sheets = google.sheets({ version: 'v4', auth: authClient as any });
+                  const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: masterSheetId });
+                  sheetTabs = sheetMeta.data.sheets?.map(s => s.properties?.title || '').filter(Boolean) || [];
+                } catch (e: any) {
+                  console.error("Failed to fetch sheet tabs:", e.message || e);
+                }
+
+                const sheetLink = `https://docs.google.com/spreadsheets/d/${masterSheetId}/edit`;
+                let tabMsg = "";
+                let inline_keyboard: any[] = [];
+                
+                if (sheetTabs.length > 0) {
+                  tabMsg = "\n\n📂 *Доступные листы (вкладки по годам):*\n" + sheetTabs.map(tab => `• 📅 *${tab} год*`).join("\n");
+                  const buttons: any[] = sheetTabs.map(tab => ({ text: `📅 ${tab} год`, url: sheetLink }));
+                  const chunked: any[] = [];
+                  for (let i = 0; i < buttons.length; i += 2) {
+                    chunked.push(buttons.slice(i, i + 2));
+                  }
+                  inline_keyboard = chunked;
+                } else {
+                  inline_keyboard = [[{ text: "📊 Открыть таблицу", url: sheetLink }]];
+                }
+
+                await sendCleanBotMessage(chatId, `📊 *Google Таблицы*\n\nНиже представлены ссылки на листы по годам для удобного просмотра и ручного редактирования:${tabMsg}`, {
+                  parse_mode: "Markdown",
+                  reply_markup: {
+                    inline_keyboard: inline_keyboard
+                  }
+                });
+              } else {
+                await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не подключена администратором.");
+              }
             } else if (mappedText.startsWith("/set_table ")) {
               const sheetId = mappedText.split(" ")[1]?.trim();
               if (!sheetId) {
@@ -1807,7 +2025,8 @@ async function startTelegramBotPolling() {
                 } else {
                   masterSheetId = sheetId;
                   saveConfig();
-                  await sendCleanBotMessage(chatId, `✅ *Общая Google Таблица успешно настроена!*\n\nID: \`${sheetId}\`\n\nТеперь вы можете добавлять данные игроков в таблицу, просто написав их имя/логин/ID, или введя команду:\n✍️ \`/add имя_или_логин\``);
+                  const sheetLink = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+                  await sendCleanBotMessage(chatId, `✅ *Общая Google Таблица успешно настроена!*\n\nID: \`${sheetId}\`\n🔗 [Открыть таблицу](${sheetLink})\n\nТеперь вы можете добавлять данные игроков в таблицу, просто написав их имя/логин/ID, или введя команду:\n✍️ \`/add имя_или_логин\``, { parse_mode: "Markdown" });
                 }
               }
             } else if (mappedText.startsWith("/add_admin ") || mappedText.startsWith("/make_admin ")) {
@@ -1826,6 +2045,108 @@ async function startTelegramBotPolling() {
               } else {
                 await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
               }
+            } else if (mappedText.toLowerCase() === "/admin_page2") {
+              const senderId = String(from.id);
+              if (isStaff(senderId)) {
+                state.keyboardPage = 2;
+                await saveBotChatState(chatId, state);
+                await sendCleanBotMessage(chatId, "📂 *Переход в панель администратора (Страница 2)*\n\nЗдесь вы можете управлять персоналом, добавлять модераторов, исключать кого-то или настраивать таблицы.", {
+                  reply_markup: getKeyboardForUser(chatId, 2)
+                });
+              } else {
+                await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора или модератора!");
+              }
+            } else if (mappedText.toLowerCase() === "/player_page1") {
+              state.keyboardPage = 1;
+              await saveBotChatState(chatId, state);
+              await sendCleanBotMessage(chatId, "🎮 *Переход в главное меню (Страница 1)*\n\nПриятной игры!", {
+                reply_markup: getKeyboardForUser(chatId, 1)
+              });
+            } else if (mappedText.toLowerCase() === "/staff" || mappedText.toLowerCase() === "/list_staff") {
+              const senderId = String(from.id);
+              if (isStaff(senderId)) {
+                const adminsList = admins.length > 0 ? admins.map(id => `• \`${id}\``).join("\n") : "_Нет_";
+                const modsList = moderators.length > 0 ? moderators.map(id => `• \`${id}\``).join("\n") : "_Нет_";
+                await sendCleanBotMessage(chatId, `👥 *Список персонала:*\n\n👑 *Администраторы:*\n${adminsList}\n\n🛠️ *Модераторы:*\n${modsList}`);
+              } else {
+                await sendCleanBotMessage(chatId, "❌ Данная команда доступна только персоналу бота!");
+              }
+            } else if (mappedText.toLowerCase() === "/prompt_add_admin") {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                await sendCleanBotMessage(chatId, "✍️ Чтобы назначить нового *администратора*, введите команду:\n`/add_admin <Telegram ID>`");
+              } else {
+                await sendCleanBotMessage(chatId, "❌ Изменять состав администраторов может только администратор!");
+              }
+            } else if (mappedText.toLowerCase() === "/prompt_add_mod") {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                await sendCleanBotMessage(chatId, "✍️ Чтобы назначить нового *модератора*, введите команду:\n`/add_mod <Telegram ID>`");
+              } else {
+                await sendCleanBotMessage(chatId, "❌ Назначать модераторов может только администратор!");
+              }
+            } else if (mappedText.toLowerCase() === "/prompt_exclude") {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                await sendCleanBotMessage(chatId, "✍️ Чтобы *исключить (разжаловать)* администратора или модератора, отправьте соответствующую команду:\n\n❌ Разжаловать админа:\n`/del_admin <Telegram ID>`\n\n❌ Разжаловать модератора:\n`/del_mod <Telegram ID>`");
+              } else {
+                await sendCleanBotMessage(chatId, "❌ Управлять персоналом может только администратор!");
+              }
+            } else if (mappedText.toLowerCase() === "/prompt_table") {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                await sendCleanBotMessage(chatId, `⚙️ *Настройка Google Таблицы*\n\nТекущий ID таблицы: \`${masterSheetId || "не задан"}\`\n\nЧтобы подключить другую таблицу, отправьте команду:\n\`/set_table <ID_таблицы>\``);
+              } else {
+                await sendCleanBotMessage(chatId, "❌ Настраивать общую таблицу могут только администраторы!");
+              }
+            } else if (mappedText.startsWith("/add_mod ")) {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                const targetId = mappedText.split(" ")[1]?.trim();
+                if (targetId) {
+                  if (!moderators.includes(targetId)) {
+                    moderators.push(targetId);
+                    saveConfig();
+                  }
+                  await sendCleanBotMessage(chatId, `✅ Игрок с Telegram ID \`${targetId}\` успешно добавлен в модераторы бота!`);
+                } else {
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/add_mod <id>`");
+                }
+              } else {
+                await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
+              }
+            } else if (mappedText.startsWith("/del_admin ") || mappedText.startsWith("/remove_admin ")) {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                const targetId = mappedText.split(" ")[1]?.trim();
+                if (targetId) {
+                  if (targetId === senderId && admins.length === 1) {
+                    await sendCleanBotMessage(chatId, "⚠️ Вы не можете разжаловать себя, так как вы единственный администратор!");
+                  } else {
+                    admins = admins.filter(id => id !== targetId);
+                    saveConfig();
+                    await sendCleanBotMessage(chatId, `✅ Администратор с Telegram ID \`${targetId}\` успешно разжалован!`);
+                  }
+                } else {
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/del_admin <id>`");
+                }
+              } else {
+                await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
+              }
+            } else if (mappedText.startsWith("/del_mod ") || mappedText.startsWith("/remove_mod ")) {
+              const senderId = String(from.id);
+              if (admins.includes(senderId)) {
+                const targetId = mappedText.split(" ")[1]?.trim();
+                if (targetId) {
+                  moderators = moderators.filter(id => id !== targetId);
+                  saveConfig();
+                  await sendCleanBotMessage(chatId, `✅ Модератор с Telegram ID \`${targetId}\` успешно разжалован!`);
+                } else {
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/del_mod <id>`");
+                }
+              } else {
+                await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
+              }
             } else if (mappedText.startsWith("/add ") || mappedText.startsWith("/add_player ") || (!mappedText.startsWith("/") && mappedText.trim().length > 0)) {
               // Extract the target search query. If it's a command, take everything post /add or /add_player.
               let targetSearch = mappedText.trim();
@@ -1839,7 +2160,7 @@ async function startTelegramBotPolling() {
                 await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите имя, логин или ID игрока:\n`/add имя_или_логин`");
               } else {
                 const senderId = String(from.id);
-                const isAdmin = admins.includes(senderId);
+                const isStaffUser = isStaff(senderId);
                 
                 try {
                   // Use memory-safe Players Map lookups to find the user instantly with zero read cost and no double fetching!
@@ -1872,8 +2193,8 @@ async function startTelegramBotPolling() {
                                    (from.username && matchedPlayer.username && String(matchedPlayer.username).toLowerCase() === String(from.username).toLowerCase()) ||
                                    (from.first_name && matchedPlayer.name && String(matchedPlayer.name).toLowerCase() === String(from.first_name).toLowerCase());
                     
-                    if (!isSelf && !isAdmin) {
-                      await sendCleanBotMessage(chatId, "⚠️ Вы можете добавлять в таблицу только собственный игровой профиль! Добавление других игроков в таблицу доступно только администраторам.");
+                    if (!isSelf && !isStaffUser) {
+                      await sendCleanBotMessage(chatId, "⚠️ Вы можете добавлять в таблицу только собственный игровой профиль! Добавление других игроков в таблицу доступно только администраторам и модераторам.");
                     } else if (!masterSheetId) {
                       await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не подключена администратором.\nПожалуйста, настройте её с помощью команды `/set_table <id_таблицы>` перед добавлением игроков.");
                     } else {
@@ -1893,7 +2214,8 @@ async function startTelegramBotPolling() {
                         await sendCleanBotMessage(chatId, `✅ *Данные игрока успешно занесены в Google Таблицу!*\n\n👤 Игрок: *${dbPlayerName}*\n💰 Монеты: *${recordCoins.toLocaleString()}*\n🕹 Клик-Очки: *${recordClicks}*\n📱 Telegram: ${dbUsername}`);
                       } catch (sheetErr: any) {
                         console.error("Master sheet integration error appending row:", sheetErr);
-                        await sendCleanBotMessage(chatId, `❌ Ошибка интеграции с Google Таблицей. Пожалуйста, убедитесь, что сервисный аккаунт имеет права редактора для этой таблицы (ID: \`${masterSheetId}\`).\n\n*Текст ошибки:* ${sheetErr.message || sheetErr}`);
+                        const sheetLink = `https://docs.google.com/spreadsheets/d/${masterSheetId}/edit`;
+                        await sendCleanBotMessage(chatId, `❌ Ошибка интеграции с Google Таблицей (возможно, проблема с правами доступа).\n\nВы можете занести данные вручную, перейдя по ссылке:\n👉 ${sheetLink}`);
                       }
                     }
                   }
@@ -1905,7 +2227,8 @@ async function startTelegramBotPolling() {
             } else {
               // Standard fallback explanation info
               const welcomeName = from.first_name || "Игрок";
-              const fallbackMsg = `👋 *Привет, ${welcomeName}!* \n\nЧтобы связать свой игровой аккаунт и включить уведомления, пожалуйста, откройте игру на сайте и нажмите кнопку **«Подключить Telegram»**!\n\n💾 Отправьте /save, чтобы вручную сохранить прогресс и проверить актуальный баланс.\n📋 Или напишите ваше *имя* или *логин*, чтобы занести ваши данные в общую Google Таблицу!`;
+              const userTgId = String(from.id);
+              const fallbackMsg = `👋 *Привет, ${welcomeName}!* \n\n📌 Ваш Telegram ID: \`${userTgId}\` *(нажмите, чтобы скопировать)*\n\nЧтобы связать свой игровой аккаунт и включить уведомления, пожалуйста, откройте игру на сайте и нажмите кнопку **«Подключить Telegram»**!\n\n💾 Отправьте /save, чтобы вручную сохранить прогресс и проверить актуальный баланс.\n📋 Или напишите ваше *имя* или *логин*, чтобы занести ваши данные в общую Google Таблицу!`;
               await sendCleanBotMessage(chatId, fallbackMsg);
             }
           }
@@ -2310,6 +2633,7 @@ async function start() {
     res.json({
       masterSheetId,
       admins,
+      moderators,
       whitelistEnabled,
       whitelistCodes
     });
@@ -2336,15 +2660,16 @@ async function start() {
   // POST update admin config settings
   app.post("/api/admin/config", (req, res) => {
     try {
-      const { masterSheetId: newSheetId, admins: newAdmins, whitelistEnabled: newWhitelistEnabled, whitelistCodes: newWhitelistCodes } = req.body;
+      const { masterSheetId: newSheetId, admins: newAdmins, moderators: newModerators, whitelistEnabled: newWhitelistEnabled, whitelistCodes: newWhitelistCodes } = req.body;
       
       if (typeof newSheetId === "string") masterSheetId = newSheetId;
       if (Array.isArray(newAdmins)) admins = newAdmins;
+      if (Array.isArray(newModerators)) moderators = newModerators;
       if (typeof newWhitelistEnabled === "boolean") whitelistEnabled = newWhitelistEnabled;
       if (Array.isArray(newWhitelistCodes)) whitelistCodes = newWhitelistCodes;
       
       saveConfig();
-      res.json({ success: true, masterSheetId, admins, whitelistEnabled, whitelistCodes });
+      res.json({ success: true, masterSheetId, admins, moderators, whitelistEnabled, whitelistCodes });
     } catch (err: any) {
       console.error("Failed to update config:", err);
       res.status(500).json({ success: false, error: err.message || "Ошибка обновления настроек" });

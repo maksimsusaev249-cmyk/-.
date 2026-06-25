@@ -3,8 +3,8 @@
   "appId": "1:836045579652:web:81ddd0eddf3989c9f169d1",
   "apiKey": "AIzaSyBAVTUrM-8xyDxWF4O-PsL0blfVJd0wRJM",
   "authDomain": "klik-71a34.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-5c15492d-8590-49b1-aa68-f25309fd69b7",
   "storageBucket": "klik-71a34.firebasestorage.app",
   "messagingSenderId": "836045579652",
-  "measurementId": ""
+  "measurementId": "",
+  "firestoreDatabaseId": "ai-studio-5c15492d-8590-49b1-aa68-f25309fd69b7"
 }

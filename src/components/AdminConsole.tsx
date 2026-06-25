@@ -67,6 +67,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
   const [cfgSheetId, setCfgSheetId] = useState("");
   const [cfgVkSecureKey, setCfgVkSecureKey] = useState("");
   const [cfgVkServiceKey, setCfgVkServiceKey] = useState("");
+  const [cfgAdmins, setCfgAdmins] = useState("");
+  const [cfgModerators, setCfgModerators] = useState("");
   const [whitelistEnabled, setWhitelistEnabled] = useState(true);
   const [whitelistCodes, setWhitelistCodes] = useState("");
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -100,6 +102,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
         setCfgSheetId(data.masterSheetId || "");
         setCfgVkSecureKey(data.vkSecureKey || "");
         setCfgVkServiceKey(data.vkServiceKey || "");
+        setCfgAdmins(data.admins?.join(", ") || "");
+        setCfgModerators(data.moderators?.join(", ") || "");
         setWhitelistEnabled(typeof data.whitelistEnabled === "boolean" ? data.whitelistEnabled : true);
         setWhitelistCodes(data.whitelistCodes?.join(", ") || "");
       }
@@ -112,6 +116,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
     setIsSavingConfig(true);
     try {
       const parsedWhitelist = whitelistCodes.split(",").map(s => s.trim()).filter(Boolean);
+      const parsedAdmins = cfgAdmins.split(",").map(s => s.trim()).filter(Boolean);
+      const parsedModerators = cfgModerators.split(",").map(s => s.trim()).filter(Boolean);
+      
       const res = await fetch(getApiUrl("/api/admin/config"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -119,6 +126,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
           masterSheetId: cfgSheetId.trim(),
           vkSecureKey: cfgVkSecureKey.trim(),
           vkServiceKey: cfgVkServiceKey.trim(),
+          admins: parsedAdmins,
+          moderators: parsedModerators,
           whitelistEnabled,
           whitelistCodes: parsedWhitelist
         }),
@@ -129,6 +138,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
         setCfgSheetId(data.masterSheetId || "");
         setCfgVkSecureKey(data.vkSecureKey || "");
         setCfgVkServiceKey(data.vkServiceKey || "");
+        setCfgAdmins(data.admins?.join(", ") || "");
+        setCfgModerators(data.moderators?.join(", ") || "");
         setWhitelistEnabled(typeof data.whitelistEnabled === "boolean" ? data.whitelistEnabled : true);
         setWhitelistCodes(data.whitelistCodes?.join(", ") || "");
       } else {
@@ -1532,6 +1543,40 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                       />
                       <span className="text-[10px] text-gray-500 font-mono mt-0.5">
                         Идентификатор общей Google Таблицы для занесения участников.
+                      </span>
+                    </div>
+
+                    {/* Admins (Telegram IDs) */}
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                        👑 Администраторы бота (Telegram IDs)
+                      </label>
+                      <input 
+                        type="text"
+                        placeholder="ID через запятую, например: 12345678, 87654321"
+                        value={cfgAdmins}
+                        onChange={(e) => setCfgAdmins(e.target.value)}
+                        className="bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors"
+                      />
+                      <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Список Telegram ID пользователей, обладающих полными правами администратора в боте.
+                      </span>
+                    </div>
+
+                    {/* Moderators (Telegram IDs) */}
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                        🛠️ Модераторы бота (Telegram IDs)
+                      </label>
+                      <input 
+                        type="text"
+                        placeholder="ID через запятую, например: 11223344, 44332211"
+                        value={cfgModerators}
+                        onChange={(e) => setCfgModerators(e.target.value)}
+                        className="bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors"
+                      />
+                      <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Список Telegram ID пользователей, которые могут добавлять игроков в Google Таблицу и переключаться в панель управления.
                       </span>
                     </div>
 
