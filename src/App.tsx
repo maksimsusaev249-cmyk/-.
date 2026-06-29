@@ -38,18 +38,31 @@ import {
   Calendar,
   Swords,
   MessageCircle,
+  TrendingUp,
+  Wallet,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Coins,
+  Clock,
+  Gift,
+  QrCode,
+  Share2,
+  Camera,
+  UserPlus,
 } from "lucide-react";
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from "recharts";
 const swordImg = "/images/item_sword.jpg";
 const potionImg = "/images/item_potion.jpg";
 const shieldImg = "/images/item_shield.jpg";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db, googleProvider, signInWithPopup, signOut } from "./firebase";
-import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, updateDoc, runTransaction, limit } from "firebase/firestore";
+import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, updateDoc, runTransaction, limit, increment } from "firebase/firestore";
 import { onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { Leaderboard } from "./components/Leaderboard";
 import { AdminConsole } from "./components/AdminConsole";
 import { getApiUrl } from "./utils/api";
 import vkBridge from "@vkontakte/vk-bridge";
+import { Html5Qrcode } from "html5-qrcode";
 
 enum OperationType {
   CREATE = 'create',
@@ -382,6 +395,36 @@ export default function App() {
     return 0;
   });
 
+  const [rubles, setRubles] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.rubles === "number" ? parsed.rubles : 10.0; // Give 10 rubles to start
+      }
+    } catch (e) {
+      console.error("Failed to parse rubles from gameDataV9", e);
+    }
+    return 10.0;
+  });
+
+  const [coinExchangeRate, setCoinExchangeRate] = useState<number>(2.45);
+  const [exchangeHistory, setExchangeHistory] = useState<{ time: string; rate: number }[]>(() => {
+    const list = [];
+    const baseRate = 2.45;
+    const now = new Date();
+    for (let i = 15; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 60 * 1000);
+      const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const variance = Math.sin(i * 0.5) * 0.35 + (Math.random() - 0.5) * 0.1;
+      list.push({
+        time: timeStr,
+        rate: parseFloat(Math.max(0.5, baseRate + variance).toFixed(3))
+      });
+    }
+    return list;
+  });
+
   const [clickPowerLevel, setClickPowerLevel] = useState<number>(() => {
     try {
       const saved = localStorage.getItem("gameDataV9");
@@ -670,7 +713,7 @@ export default function App() {
     lastWarWinnerReward: 5000,
     history: []
   });
-  const [activeSocialTab, setActiveSocialTab] = useState<"players" | "clans" | "friends" | "leaderboard">("players");
+  const [activeSocialTab, setActiveSocialTab] = useState<"players" | "clans" | "friends" | "leaderboard" | "referrals">("players");
   const [viewingProfile, setViewingProfile] = useState<Player | null>(null);
   const [isSocialOpen, setIsSocialOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -679,9 +722,29 @@ export default function App() {
   const [clanWarAttacksLeft, setClanWarAttacksLeft] = useState<number>(2);
   const [battleDamageEffects, setBattleDamageEffects] = useState<{ id: number; x: number; y: number; text: string }[]>([]);
 
+  // --- REFERRALS & INVITE SYSTEM STATES ---
+  const [userReferrals, setUserReferrals] = useState<any[]>([]);
+  const [referralCodeInput, setReferralCodeInput] = useState("");
+  const [isSubmittingReferral, setIsSubmittingReferral] = useState(false);
+  const [myReferrer, setMyReferrer] = useState<string | null>(null);
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [isInviteOptionsOpen, setIsInviteOptionsOpen] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [showClanQrModal, setShowClanQrModal] = useState<string | null>(null);
+  const [pendingClanInvite, setPendingClanInvite] = useState<string | null>(null);
+  const [pendingClanPassword, setPendingClanPassword] = useState("");
+
   // --- MARKETPLACE / SHOP STATES ---
-  const [activeShopTab, setActiveShopTab] = useState<"buy" | "sell">("buy");
+  const [activeShopTab, setActiveShopTab] = useState<"buy" | "sell" | "exchange">("buy");
+  const [exchangeCoinsAmount, setExchangeCoinsAmount] = useState("");
+  const [exchangeRublesAmount, setExchangeRublesAmount] = useState("");
+  const [isExchanging, setIsExchanging] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawSystem, setWithdrawSystem] = useState<"vkpay" | "qiwi" | "card">("vkpay");
+  const [withdrawDetails, setWithdrawDetails] = useState("");
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [marketplaceListings, setMarketplaceListings] = useState<any[]>([]);
+  const [userWithdrawals, setUserWithdrawals] = useState<any[]>([]);
   const [selectedListing, setSelectedListing] = useState<any | null>(null);
   const [purchasedListingId, setPurchasedListingId] = useState<string | null>(null);
   const [isBuying, setIsBuying] = useState(false);
@@ -1050,6 +1113,7 @@ export default function App() {
       playerClan,
       playerId,
       currentQuest,
+      rubles,
       lastActiveTimestamp: Date.now() + timeOffsetRef.current
     }));
     localStorage.setItem("gameFriendsV9", JSON.stringify(friendsList));
@@ -1115,6 +1179,30 @@ export default function App() {
       window.removeEventListener("pagehide", handleUnloadOrHide);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
+  }, []);
+
+  // --- EXCHANGE RATE FLUCTUATION ENGINE ---
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCoinExchangeRate((prev) => {
+        // Random walk: small random changes
+        const change = (Math.random() - 0.495) * 0.08;
+        const newRate = Math.max(0.4, parseFloat((prev + change).toFixed(3)));
+        
+        setExchangeHistory((prevHistory) => {
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const updated = [...prevHistory, { time: timeStr, rate: newRate }];
+          if (updated.length > 20) {
+            updated.shift();
+          }
+          return updated;
+        });
+        
+        return newRate;
+      });
+    }, 6000);
+    return () => clearInterval(interval);
   }, []);
 
   // --- MULTIPLAYER WEBSOCKET CONNECTIVITY ---
@@ -1238,6 +1326,7 @@ export default function App() {
                   setNewClanName("");
                   setNewClanPassword("");
                   setIsClanPrivate(false);
+                  logUserAction("Создал клан: " + clan);
                 } else {
                   addToast(`⚠️ Ошибка: ${error || "Не удалось создать клан"}`);
                 }
@@ -1250,6 +1339,7 @@ export default function App() {
                   addToast(`⚔️ Вы успешно вступили в клан "${clan}"!`);
                   setJoiningClanWithPassword(null);
                   setEnteredJoinPassword("");
+                  logUserAction("Вступил в клан: " + clan);
                 } else {
                   addToast(`⚠️ Ошибка вступления: ${error || "Неверный пароль"}`);
                 }
@@ -1260,6 +1350,7 @@ export default function App() {
                 if (success) {
                   setPlayerClan(null);
                   addToast("❌ Вы успешно покинули клан.");
+                  logUserAction("Вышел из клана");
                 } else {
                   addToast(`⚠️ Ошибка при выходе: ${error || "Неизвестная ошибка"}`);
                 }
@@ -1673,6 +1764,7 @@ export default function App() {
         setClickPowerLevel((prev) => prev + 1);
         playPurchaseSound();
         addToast("💪 Сила клика повышена!");
+        logUserAction("Купил апгрейд: Сила клика (уровень " + (clickPowerLevel + 1) + ")", coins - price);
       } else {
         addToast("💰 Мало монет для этого апгрейда!");
       }
@@ -1683,6 +1775,7 @@ export default function App() {
         setAutoClickerLevel((prev) => prev + 1);
         playPurchaseSound();
         addToast("🤖 Автокликер прокачан!");
+        logUserAction("Купил апгрейд: Автокликер (уровень " + (autoClickerLevel + 1) + ")", coins - price);
       } else {
         addToast("💰 Мало монет для этого апгрейда!");
       }
@@ -1696,6 +1789,7 @@ export default function App() {
         setEnergy((prev) => prev + 50);
         playPurchaseSound();
         addToast("🔋 Энергия увеличена!");
+        logUserAction("Купил апгрейд: Энергия (уровень " + (energyLevel + 1) + ")", coins - price);
       } else {
         addToast("💰 Мало монет для этого апгрейда!");
       }
@@ -1812,6 +1906,46 @@ export default function App() {
     }
   };
 
+  // --- CAPTURE REFERRAL & CLAN CODE ON STARTUP ---
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      let ref = params.get("ref");
+      let clanParam = params.get("clan");
+      if (window.location.hash) {
+        const hashParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
+        if (!ref) ref = hashParams.get("ref");
+        if (!clanParam) clanParam = hashParams.get("clan");
+      }
+      if (ref) {
+        console.log("Captured referral ID from URL:", ref);
+        localStorage.setItem("game_referrer_id", ref);
+      }
+      if (clanParam) {
+        console.log("Captured clan name from URL:", clanParam);
+        localStorage.setItem("game_join_clan_name", clanParam);
+      }
+    } catch (e) {
+      console.error("Failed to parse URL parameters:", e);
+    }
+  }, []);
+
+  // Check for pending clan join on startup
+  useEffect(() => {
+    if (!currentUser || clansPrivacy.length === 0) return;
+    const pending = localStorage.getItem("game_join_clan_name");
+    if (pending) {
+      const exists = clansPrivacy.some(c => c.name.toLowerCase() === pending.toLowerCase());
+      if (exists) {
+        const exactClan = clansPrivacy.find(c => c.name.toLowerCase() === pending.toLowerCase())?.name || pending;
+        setPendingClanInvite(exactClan);
+      } else {
+        console.warn(`Pending clan "${pending}" from URL not found in clansPrivacy`);
+      }
+      localStorage.removeItem("game_join_clan_name");
+    }
+  }, [currentUser, clansPrivacy]);
+
   // --- GOOGLE AUTHENTICATION SYSTEM EFFECTS ---
   useEffect(() => {
     if (!auth) {
@@ -1895,6 +2029,7 @@ export default function App() {
               }
             }
             setCoins(loadedCoins);
+            if (typeof data.rubles === "number") setRubles(data.rubles);
             if (typeof data.clickPowerLevel === "number") setClickPowerLevel(data.clickPowerLevel);
             if (typeof data.autoClickerLevel === "number") setAutoClickerLevel(data.autoClickerLevel);
             if (typeof data.energyLevel === "number") setEnergyLevel(data.energyLevel);
@@ -2032,6 +2167,51 @@ export default function App() {
               setIsWhitelistApproved(true);
             }
 
+            const savedReferrerId = localStorage.getItem("game_referrer_id");
+            let finalReferredBy = null;
+            if (savedReferrerId && savedReferrerId !== user.uid) {
+              try {
+                const refDoc = doc(db, "users", savedReferrerId);
+                const refSnap = await getDoc(refDoc);
+                if (refSnap.exists()) {
+                  finalReferredBy = savedReferrerId;
+                  finalCoins = finalCoins + 50000;
+                  setCoins(finalCoins);
+                  
+                  await updateDoc(refDoc, {
+                    coins: increment(100000)
+                  });
+                  
+                  const invData = refSnap.data();
+                  const invName = invData.playerName || "Пригласитель";
+
+                  await addDoc(collection(db, "user_actions"), {
+                    userId: user.uid,
+                    playerName: finalPlayerName || "Игрок",
+                    action: "Принял приглашение (Регистрация)",
+                    coins: finalCoins,
+                    details: `Зарегистрировался по ссылке от ${invName} (${savedReferrerId}). Получено 50,000 монет на старт.`,
+                    timestamp: serverTimestamp()
+                  });
+
+                  await addDoc(collection(db, "user_actions"), {
+                    userId: savedReferrerId,
+                    playerName: invName,
+                    action: "Пригласил игрока (Регистрация)",
+                    coins: (invData.coins || 0) + 100000,
+                    details: `Игрок ${finalPlayerName || "Игрок"} зарегистрировался по приглашению. Получено 100,000 монет.`,
+                    timestamp: serverTimestamp()
+                  });
+
+                  addToast(`🎉 Вас пригласил игрок ${invName}! Получено +50,000 монет на старт!`);
+                }
+              } catch (err) {
+                console.warn("Failed to process automatic referral reward:", err);
+              } finally {
+                localStorage.removeItem("game_referrer_id");
+              }
+            }
+
             await setDoc(docRef, {
               coins: finalCoins,
               clickPowerLevel: finalClickPower,
@@ -2049,6 +2229,7 @@ export default function App() {
               notificationsEnabled: true,
               whitelistApproved: isApproved,
               ...(tgId ? { telegramId: tgId } : {}),
+              ...(finalReferredBy ? { referredBy: finalReferredBy } : {}),
               updatedAt: serverTimestamp()
             });
             if (user.displayName) {
@@ -2213,11 +2394,30 @@ export default function App() {
         playerClan,
         levelItems,
         currentQuest,
+        rubles,
         notificationsEnabled,
+        friendsCount: friendsList.length,
+        friends: friendsList,
         lastActiveTimestamp: Date.now() + timeOffsetRef.current,
         ...(tgId ? { telegramId: tgId } : {}),
         updatedAt: serverTimestamp()
       }, { merge: true });
+
+      // Log this activity to user_actions
+      try {
+        await addDoc(collection(db, "user_actions"), {
+          userId: user.uid,
+          playerName: playerName || user.displayName || "Игрок",
+          coins: coinsToSave,
+          totalClicks: totalClicks,
+          playerClan: playerClan || null,
+          friendsCount: friendsList.length,
+          action: isManual ? "Ручное сохранение" : "Автосохранение",
+          timestamp: serverTimestamp()
+        });
+      } catch (err) {
+        console.error("Failed to log user action in saveToFirestore:", err);
+      }
 
       // Secondary sync to VK Cloud storage if they are a VK user
       if (user.email?.startsWith("vk_")) {
@@ -2248,6 +2448,238 @@ export default function App() {
       setSyncProgress(null);
     }
   };
+
+  const logUserAction = async (actionDesc: string, customCoins?: number) => {
+    if (!currentUser) return;
+    try {
+      await addDoc(collection(db, "user_actions"), {
+        userId: currentUser.uid,
+        playerName: playerName || currentUser.displayName || "Игрок",
+        coins: typeof customCoins === "number" ? customCoins : coins,
+        totalClicks: totalClicks,
+        playerClan: playerClan || null,
+        friendsCount: friendsList.length,
+        action: actionDesc,
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Failed to log user action:", err);
+    }
+  };
+
+  // --- LISTEN TO USER REFERRALS ---
+  useEffect(() => {
+    if (!currentUser) {
+      setUserReferrals([]);
+      setMyReferrer(null);
+      return;
+    }
+    
+    // 1. Get my referrer from my own user profile
+    const myUserDocRef = doc(db, "users", currentUser.uid);
+    const unsubMyUser = onSnapshot(myUserDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setMyReferrer(data.referredBy || null);
+      }
+    });
+
+    // 2. Query users who I referred
+    const q = query(collection(db, "users"), where("referredBy", "==", currentUser.uid));
+    const unsubReferrals = onSnapshot(q, (snapshot) => {
+      const list: any[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      setUserReferrals(list);
+    }, (error) => {
+      console.error("Failed to listen to referrals:", error);
+    });
+
+    return () => {
+      unsubMyUser();
+      unsubReferrals();
+    };
+  }, [currentUser]);
+
+  const handleApplyReferrer = async (referrerId: string) => {
+    if (!currentUser) {
+      addToast("⚠️ Вы должны быть авторизованы!");
+      return;
+    }
+    const cleanId = referrerId.trim();
+    if (!cleanId) {
+      addToast("⚠️ Введите ID пригласителя!");
+      return;
+    }
+    if (cleanId === currentUser.uid) {
+      addToast("⚠️ Вы не можете пригласить сами себя!");
+      return;
+    }
+    if (myReferrer) {
+      addToast("⚠️ Вы уже ввели пригласителя!");
+      return;
+    }
+
+    setIsSubmittingReferral(true);
+    try {
+      const refUserDoc = doc(db, "users", cleanId);
+      const refUserSnap = await getDoc(refUserDoc);
+      if (!refUserSnap.exists()) {
+        addToast("⚠️ Пользователь с таким ID не найден!");
+        setIsSubmittingReferral(false);
+        return;
+      }
+
+      const inviterData = refUserSnap.data();
+      const inviterName = inviterData.playerName || "Пригласитель";
+
+      // Apply the referral using updateDoc
+      const myUserDocRef = doc(db, "users", currentUser.uid);
+      
+      // Update my referredBy and add coins
+      await updateDoc(myUserDocRef, {
+        referredBy: cleanId,
+        coins: increment(50000)
+      });
+
+      // Update inviter's coins
+      await updateDoc(refUserDoc, {
+        coins: increment(100000)
+      });
+
+      // Log both actions
+      await addDoc(collection(db, "user_actions"), {
+        userId: currentUser.uid,
+        playerName: playerName || "Игрок",
+        action: "Принял приглашение",
+        coins: coins + 50000,
+        details: `Ввел код пригласителя ${inviterName} (${cleanId}). Получено 50,000 монет на старт.`,
+        timestamp: serverTimestamp()
+      });
+
+      await addDoc(collection(db, "user_actions"), {
+        userId: cleanId,
+        playerName: inviterName,
+        action: "Пригласил игрока",
+        coins: (inviterData.coins || 0) + 100000,
+        details: `Игрок ${playerName || "Игрок"} принял приглашение. Получено 100,000 монет.`,
+        timestamp: serverTimestamp()
+      });
+
+      addToast(`🎉 Вы успешно приняли приглашение от ${inviterName}! Получено +50,000 монет!`);
+    } catch (err: any) {
+      console.error("Error applying referrer:", err);
+      addToast(`⚠️ Ошибка: ${err.message || "Не удалось применить код"}`);
+    } finally {
+      setIsSubmittingReferral(false);
+    }
+  };
+
+  const handleQrScanned = (text: string) => {
+    try {
+      if (text.includes("clan=")) {
+        let clanName = "";
+        try {
+          if (text.startsWith("http")) {
+            const urlObj = new URL(text);
+            clanName = urlObj.searchParams.get("clan") || "";
+          } else {
+            const parts = text.split("clan=");
+            if (parts.length > 1) {
+              clanName = decodeURIComponent(parts[1].split("&")[0].split("#")[0]);
+            }
+          }
+        } catch (err) {
+          const parts = text.split("clan=");
+          if (parts.length > 1) {
+            clanName = decodeURIComponent(parts[1].split("&")[0].split("#")[0]);
+          }
+        }
+        clanName = clanName.trim();
+        if (clanName) {
+          addToast(`🏰 Обнаружен QR-код клана "${clanName}"!`);
+          setIsScanModalOpen(false);
+          setPendingClanInvite(clanName);
+          setPendingClanPassword("");
+          return;
+        }
+      }
+
+      let refId = text;
+      if (text.includes("ref=")) {
+        const urlObj = new URL(text);
+        const searchParams = new URLSearchParams(urlObj.search);
+        refId = searchParams.get("ref") || text;
+      } else if (text.includes("?")) {
+        const parts = text.split("ref=");
+        if (parts.length > 1) {
+          refId = parts[1].split("&")[0].split("#")[0];
+        }
+      }
+      
+      refId = refId.trim();
+      setReferralCodeInput(refId);
+      addToast("📋 Код приглашения успешно считан!");
+      setIsScanModalOpen(false);
+      handleApplyReferrer(refId);
+    } catch (e) {
+      console.error("Failed to parse scanned QR code:", e);
+      addToast("⚠️ Ошибка распознавания ссылки.");
+    }
+  };
+
+  const handleQrImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    addToast("🔄 Сканирование изображения...");
+    const html5QrCode = new Html5Qrcode("qr-reader-dummy");
+    html5QrCode.scanFile(file, true)
+      .then(decodedText => {
+        handleQrScanned(decodedText);
+      })
+      .catch(err => {
+        console.error("QR image scan error:", err);
+        addToast("⚠️ QR-код на изображении не найден. Попробуйте другой скриншот!");
+      });
+  };
+
+  // Camera scanner subscription
+  useEffect(() => {
+    let html5QrCode: Html5Qrcode | null = null;
+    if (isScanModalOpen) {
+      const timer = setTimeout(() => {
+        try {
+          html5QrCode = new Html5Qrcode("qr-reader");
+          html5QrCode.start(
+            { facingMode: "environment" },
+            {
+              fps: 10,
+              qrbox: { width: 220, height: 220 }
+            },
+            (decodedText) => {
+              handleQrScanned(decodedText);
+            },
+            () => {}
+          ).catch(err => {
+            console.error("Camera start error:", err);
+            addToast("⚠️ Камера недоступна. Выберите файл-скриншот или введите код вручную!");
+          });
+        } catch (e) {
+          console.error("Scanner initialization error:", e);
+        }
+      }, 300);
+      return () => {
+        clearTimeout(timer);
+        if (html5QrCode) {
+          if (html5QrCode.isScanning) {
+            html5QrCode.stop().catch(err => console.warn("Failed to stop scanner:", err));
+          }
+        }
+      };
+    }
+  }, [isScanModalOpen]);
 
   // Periodic autosave every 60 seconds of play
   useEffect(() => {
@@ -2961,6 +3393,38 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // --- LISTEN TO USER WITHDRAWALS ---
+  useEffect(() => {
+    if (!currentUser) {
+      setUserWithdrawals([]);
+      return;
+    }
+    try {
+      const withdrawalsCol = collection(db, "withdrawals");
+      const q = query(withdrawalsCol, where("userId", "==", currentUser.uid));
+      
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const items: any[] = [];
+        snapshot.forEach((docSnap) => {
+          items.push({ id: docSnap.id, ...docSnap.data() });
+        });
+        // Sort items newest first based on createdAt
+        items.sort((a, b) => {
+          const timeA = a.createdAt?.seconds || a.createdAt?.toMillis?.() || 0;
+          const timeB = b.createdAt?.seconds || b.createdAt?.toMillis?.() || 0;
+          return timeB - timeA;
+        });
+        setUserWithdrawals(items);
+      }, (error) => {
+        console.warn("Withdrawals listen error:", error);
+      });
+
+      return () => unsubscribe();
+    } catch (e) {
+      console.error("Failed to setup withdrawals listener:", e);
+    }
+  }, [currentUser]);
+
   const handleCreateListing = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) {
@@ -3232,8 +3696,8 @@ export default function App() {
       // Update states locally
       setCoins(prev => prev - listing.price);
       setLevelItems(prev => [...prev, boughtItem]);
-      
       addToast(`🎉 Вы успешно купили "${listing.title}" за ${listing.price} комнов!`);
+      logUserAction("Купил предмет на рынке: " + listing.title, coins - listing.price);
       
       setPurchasedListingId(listing.id);
       setIsBuying(true);
@@ -3534,6 +3998,7 @@ export default function App() {
     }
     setFriendsList((prev) => [...prev, id]);
     addToast(`⭐ ${name} добавлен в друзья!`);
+    logUserAction("Добавил друга: " + name);
   };
 
   const handleRemoveFriend = (id: string) => {
@@ -3542,6 +4007,7 @@ export default function App() {
     if (activeFriendChatId === id) {
       setActiveFriendChatId(null);
     }
+    logUserAction("Удалил друга");
   };
 
   const handleViewFriendProfile = (fid: string) => {
@@ -3895,6 +4361,195 @@ export default function App() {
     );
   };
 
+  const handleExchangeCoins = async (amount: number) => {
+    if (isNaN(amount) || amount <= 0) {
+      addToast("⚠️ Пожалуйста, введите корректное количество коинов");
+      return;
+    }
+    if (coins < amount) {
+      addToast("⚠️ Недостаточно коинов на балансе!");
+      return;
+    }
+    setIsExchanging(true);
+    try {
+      // 1KK (1,000,000) coins cost is coinExchangeRate rubles
+      const rublesGained = parseFloat(((amount / 1000000) * coinExchangeRate).toFixed(4));
+      
+      const newCoins = coins - amount;
+      const newRubles = parseFloat((rubles + rublesGained).toFixed(4));
+      
+      setCoins(newCoins);
+      setRubles(newRubles);
+      setExchangeCoinsAmount("");
+      
+      // Save locally
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        parsed.coins = newCoins;
+        parsed.rubles = newRubles;
+        localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+      }
+      
+      // Save to Firestore
+      if (auth.currentUser) {
+        const docRef = doc(db, "users", auth.currentUser.uid);
+        await setDoc(docRef, { coins: newCoins, rubles: newRubles }, { merge: true });
+        
+        // Log custom action to history
+        await addDoc(collection(db, "user_actions"), {
+          userId: auth.currentUser.uid,
+          playerName: playerName || "Игрок",
+          action: "Продажа коинов",
+          coins: newCoins,
+          details: `Продано ${amount.toLocaleString()} CON за ${rublesGained.toFixed(2)} ₽ по курсу ${coinExchangeRate.toFixed(3)} ₽/1KK`,
+          updatedAt: serverTimestamp()
+        });
+      }
+      
+      addToast(`🎉 Продано ${amount.toLocaleString()} коинов за +${rublesGained.toFixed(2)} ₽!`);
+    } catch (e: any) {
+      console.error("Exchange error:", e);
+      addToast("⚠️ Ошибка проведения обмена");
+    } finally {
+      setIsExchanging(false);
+    }
+  };
+
+  const handleExchangeRubles = async (rubAmount: number) => {
+    if (isNaN(rubAmount) || rubAmount <= 0) {
+      addToast("⚠️ Введите корректную сумму в рублях");
+      return;
+    }
+    if (rubles < rubAmount) {
+      addToast("⚠️ Недостаточно рублей на балансе!");
+      return;
+    }
+    setIsExchanging(true);
+    try {
+      // 1KK (1,000,000) coins cost is coinExchangeRate rubles
+      const coinsGained = Math.floor((rubAmount / coinExchangeRate) * 1000000);
+      
+      const newCoins = coins + coinsGained;
+      const newRubles = parseFloat((rubles - rubAmount).toFixed(4));
+      
+      setCoins(newCoins);
+      setRubles(newRubles);
+      setExchangeRublesAmount("");
+      
+      // Save locally
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        parsed.coins = newCoins;
+        parsed.rubles = newRubles;
+        localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+      }
+      
+      // Save to Firestore
+      if (auth.currentUser) {
+        const docRef = doc(db, "users", auth.currentUser.uid);
+        await setDoc(docRef, { coins: newCoins, rubles: newRubles }, { merge: true });
+        
+        // Log custom action to history
+        await addDoc(collection(db, "user_actions"), {
+          userId: auth.currentUser.uid,
+          playerName: playerName || "Игрок",
+          action: "Покупка коинов",
+          coins: newCoins,
+          details: `Куплено ${coinsGained.toLocaleString()} CON за ${rubAmount.toFixed(2)} ₽ по курсу ${coinExchangeRate.toFixed(3)} ₽/1KK`,
+          updatedAt: serverTimestamp()
+        });
+      }
+      
+      addToast(`🎉 Приобретено ${coinsGained.toLocaleString()} коинов за ${rubAmount.toFixed(2)} ₽!`);
+    } catch (e: any) {
+      console.error("Exchange rubles error:", e);
+      addToast("⚠️ Ошибка проведения обмена");
+    } finally {
+      setIsExchanging(false);
+    }
+  };
+
+  const [withdrawStep, setWithdrawStep] = useState<string | null>(null);
+
+  const handleWithdrawRubles = async () => {
+    const amount = parseFloat(withdrawAmount);
+    if (isNaN(amount) || amount <= 0) {
+      addToast("⚠️ Пожалуйста, введите корректную сумму для вывода");
+      return;
+    }
+    if (amount < 5) {
+      addToast("⚠️ Минимальная сумма вывода составляет 5.00 ₽");
+      return;
+    }
+    if (rubles < amount) {
+      addToast("⚠️ Недостаточно рублей на балансе!");
+      return;
+    }
+    if (!withdrawDetails.trim()) {
+      addToast("⚠️ Пожалуйста, укажите реквизиты получателя");
+      return;
+    }
+    
+    setIsWithdrawing(true);
+    setWithdrawStep("Создание заявки на выплату...");
+    
+    try {
+      await new Promise(r => setTimeout(r, 600));
+      setWithdrawStep("Резервирование баланса...");
+      await new Promise(r => setTimeout(r, 500));
+      
+      const newRubles = parseFloat((rubles - amount).toFixed(4));
+      setRubles(newRubles);
+      setWithdrawAmount("");
+      setWithdrawDetails("");
+      
+      // Save locally
+      const saved = localStorage.getItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        parsed.rubles = newRubles;
+        localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+      }
+      
+      // Save to Firestore
+      if (auth.currentUser) {
+        const docRef = doc(db, "users", auth.currentUser.uid);
+        await setDoc(docRef, { rubles: newRubles }, { merge: true });
+        
+        // Log withdrawal to user_actions
+        await addDoc(collection(db, "user_actions"), {
+          userId: auth.currentUser.uid,
+          playerName: playerName || "Игрок",
+          action: "Запрос вывода средств",
+          coins: coins,
+          details: `Создана заявка на вывод ${amount.toFixed(2)} ₽ на ${withdrawSystem.toUpperCase()} (${withdrawDetails}). Статус: Ожидание.`,
+          updatedAt: serverTimestamp()
+        });
+        
+        // Log to dedicated withdrawals collection
+        await addDoc(collection(db, "withdrawals"), {
+          userId: auth.currentUser.uid,
+          playerName: playerName || "Игрок",
+          amount: amount,
+          system: withdrawSystem,
+          details: withdrawDetails,
+          status: "pending",
+          createdAt: serverTimestamp()
+        });
+      }
+      
+      addToast(`🎉 Заявка на ${amount.toFixed(2)} ₽ успешно создана и отправлена администратору на одобрение!`);
+    } catch (e: any) {
+      console.error("Withdraw error:", e);
+      addToast("⚠️ Ошибка обработки вывода");
+    } finally {
+      setIsWithdrawing(false);
+      setWithdrawStep(null);
+    }
+  };
+
   const renderShopContent = () => {
     // Computed filtered listings inside the shop sheet handler
     const filteredListings = marketplaceListings
@@ -3945,18 +4600,18 @@ export default function App() {
     return (
       <div className="flex flex-col h-full min-h-0 text-[#aab7c4]">
         {/* Inner Shop sub-navigation */}
-        <div className="flex bg-slate-950/45 p-1 rounded-xl border border-white/5 mb-3 select-none text-xs font-black uppercase shadow-inner">
+        <div className="flex bg-slate-950/45 p-1 rounded-xl border border-white/5 mb-3 select-none text-[10px] sm:text-xs font-black uppercase shadow-inner">
           <button
             type="button"
             onClick={() => {
               setActiveShopTab("buy");
               setSelectedListing(null);
             }}
-            className={`flex-1 py-3 rounded-lg transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer border-none outline-none ${
+            className={`flex-1 py-2.5 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeShopTab === "buy" ? "bg-[#e67e22] text-white font-extrabold shadow-md" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <ShoppingBag className="w-4 h-4" /> КУПИТЬ ЛОТЫ
+            <ShoppingBag className="w-3.5 h-3.5" /> КУПИТЬ ЛОТЫ
           </button>
           <button
             type="button"
@@ -3964,11 +4619,23 @@ export default function App() {
               setActiveShopTab("sell");
               setSelectedListing(null);
             }}
-            className={`flex-1 py-3 rounded-lg transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer border-none outline-none ${
+            className={`flex-1 py-2.5 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeShopTab === "sell" ? "bg-[#e67e22] text-white font-extrabold shadow-md" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <Tag className="w-4 h-4" /> ПРОДАТЬ / ИНВЕНТАРЬ
+            <Tag className="w-3.5 h-3.5" /> ПРОДАТЬ
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveShopTab("exchange");
+              setSelectedListing(null);
+            }}
+            className={`flex-1 py-2.5 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+              activeShopTab === "exchange" ? "bg-[#e67e22] text-white font-extrabold shadow-md" : "text-gray-400 hover:text-white bg-transparent"
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5" /> БИРЖА COIN
           </button>
         </div>
 
@@ -4100,7 +4767,7 @@ export default function App() {
               )}
             </div>
           </div>
-        ) : (
+        ) : activeShopTab === "sell" ? (
           /* --- SELL CONTAINER (LEVEL REWARD INVENTORY + FORM) --- */
           <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 min-h-0">
             {/* Level Reward items listing section */}
@@ -4331,6 +4998,357 @@ export default function App() {
               </div>
             )}
           </div>
+        ) : (
+          /* --- EXCHANGE CONTAINER --- */
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 min-h-0">
+             {/* Beautiful Exchange rate live status widget */}
+             <div className="bg-[#0f172a] border border-white/5 rounded-2xl p-3 flex flex-col gap-2.5 shadow-lg">
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-[#e67e22] animate-pulse" />
+                    <span className="text-[11px] font-black text-white uppercase tracking-wider">Биржа VK Coin</span>
+                  </div>
+                  <span className="text-[10px] bg-[#e67e22]/10 border border-[#e67e22]/20 text-[#e67e22] px-2 py-0.5 rounded-full font-black tracking-wide font-mono animate-pulse">
+                    Live 🔴
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mt-1">
+                  <div className="bg-slate-900/60 p-2.5 rounded-xl border border-white/5 flex flex-col">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Текущий курс коина</span>
+                    <span className="text-sm font-extrabold text-white mt-1 flex items-center gap-1">
+                      {coinExchangeRate.toFixed(3)} <span className="text-xs text-[#e67e22] font-semibold">₽ / 1KK (млн)</span>
+                    </span>
+                  </div>
+                  <div className="bg-slate-900/60 p-2.5 rounded-xl border border-white/5 flex flex-col">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Ваш баланс рублей</span>
+                    <span className="text-sm font-extrabold text-[#2ecc71] mt-1 flex items-center gap-1">
+                      {rubles.toFixed(2)} <span className="text-xs text-[#2ecc71] font-semibold">₽</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Interactive Realtime Recharts Graph */}
+                <div className="flex flex-col gap-1 mt-1">
+                  <span className="text-[9px] text-gray-500 font-black uppercase tracking-wider font-mono">График колебаний курса</span>
+                  <div className="h-32 w-full bg-slate-950/40 border border-white/5 rounded-xl p-1 relative overflow-hidden flex flex-col justify-center">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={exchangeHistory} margin={{ top: 10, right: 5, left: -25, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="rateGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#e67e22" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#e67e22" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="time" stroke="#475569" fontSize={7} tickLine={false} axisLine={false} />
+                        <YAxis domain={['auto', 'auto']} stroke="#475569" fontSize={7} tickLine={false} axisLine={false} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '9px' }}
+                          labelStyle={{ color: '#94a3b8', fontWeight: 'bold' }}
+                          itemStyle={{ color: '#e67e22' }}
+                        />
+                        <Area type="monotone" dataKey="rate" stroke="#e67e22" strokeWidth={1.5} fillOpacity={1} fill="url(#rateGradient)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+             </div>
+
+             {/* Double Trade Panel: Buy & Sell */}
+             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* SELL COINS PANEL */}
+                <div className="bg-[#0f172a] border border-white/5 rounded-2xl p-3 flex flex-col gap-2 shadow-lg">
+                  <span className="text-[10px] text-amber-400 font-black uppercase tracking-wider flex items-center gap-1 font-mono">
+                    <ArrowUpRight className="w-4 h-4 text-amber-400" /> Продать коины за рубли
+                  </span>
+                  
+                  <div className="flex flex-col gap-1 mt-1">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Сумма коинов (CON)</span>
+                    <div className="relative flex items-center">
+                      <input 
+                        type="number"
+                        placeholder="Введите количество..."
+                        value={exchangeCoinsAmount}
+                        onChange={(e) => {
+                          setExchangeCoinsAmount(e.target.value);
+                          setExchangeRublesAmount("");
+                        }}
+                        className="w-full bg-slate-950 text-xs text-white p-2.5 rounded-xl border border-white/5 outline-none focus:border-[#e67e22]/50 font-mono"
+                      />
+                      <span className="absolute right-2 text-[9px] bg-slate-900 border border-white/5 px-2 py-0.5 rounded text-gray-400 font-mono font-bold">
+                        Баланс: {coins.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Calculations summary */}
+                  {Number(exchangeCoinsAmount) > 0 && (
+                    <div className="bg-slate-950/40 p-2 rounded-lg border border-white/5 flex justify-between items-center text-[10px]">
+                      <span className="text-gray-500 font-semibold">Вы получите:</span>
+                      <span className="text-emerald-400 font-black font-mono">
+                        +{parseFloat(((Number(exchangeCoinsAmount) / 1000000) * coinExchangeRate).toFixed(4))} ₽
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Coin Presets */}
+                  <div className="grid grid-cols-4 gap-1 mt-1">
+                    {[100000, 1000000, 10000000].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setExchangeCoinsAmount(String(preset));
+                          setExchangeRublesAmount("");
+                        }}
+                        className="py-1 bg-slate-900 hover:bg-slate-850 text-[9px] font-black rounded-lg border border-white/5 text-gray-300 transition-colors uppercase outline-none"
+                      >
+                        {preset >= 1000000 ? `${preset / 1000000} KK` : `${preset / 1000}K`}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExchangeCoinsAmount(String(coins));
+                        setExchangeRublesAmount("");
+                      }}
+                      className="py-1 bg-amber-500/10 hover:bg-amber-500/20 text-[9px] font-black rounded-lg border border-amber-500/20 text-amber-400 transition-colors uppercase outline-none"
+                    >
+                      Все
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isExchanging || !exchangeCoinsAmount || Number(exchangeCoinsAmount) <= 0}
+                    onClick={() => handleExchangeCoins(Number(exchangeCoinsAmount))}
+                    className="mt-2 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-600 text-xs font-black rounded-xl text-white transition-all uppercase tracking-wider outline-none border-none shadow cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    {isExchanging ? "Обработка..." : "Продать коины 💸"}
+                  </button>
+                </div>
+
+                {/* BUY COINS PANEL */}
+                <div className="bg-[#0f172a] border border-white/5 rounded-2xl p-3 flex flex-col gap-2 shadow-lg">
+                  <span className="text-[10px] text-emerald-400 font-black uppercase tracking-wider flex items-center gap-1 font-mono">
+                    <ArrowDownLeft className="w-4 h-4 text-emerald-400" /> Купить коины за рубли
+                  </span>
+                  
+                  <div className="flex flex-col gap-1 mt-1">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Сумма рублей (₽)</span>
+                    <div className="relative flex items-center">
+                      <input 
+                        type="number"
+                        placeholder="Введите сумму в ₽..."
+                        value={exchangeRublesAmount}
+                        onChange={(e) => {
+                          setExchangeRublesAmount(e.target.value);
+                          setExchangeCoinsAmount("");
+                        }}
+                        className="w-full bg-slate-950 text-xs text-white p-2.5 rounded-xl border border-white/5 outline-none focus:border-emerald-500/50 font-mono"
+                      />
+                      <span className="absolute right-2 text-[9px] bg-slate-900 border border-white/5 px-2 py-0.5 rounded text-gray-400 font-mono font-bold">
+                        Баланс: {rubles.toFixed(2)} ₽
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Calculations summary */}
+                  {Number(exchangeRublesAmount) > 0 && (
+                    <div className="bg-slate-950/40 p-2 rounded-lg border border-white/5 flex justify-between items-center text-[10px]">
+                      <span className="text-gray-500 font-semibold">Вы получите:</span>
+                      <span className="text-amber-400 font-black font-mono">
+                        +{Math.floor((Number(exchangeRublesAmount) / coinExchangeRate) * 1000000).toLocaleString()} CON
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Ruble Presets */}
+                  <div className="grid grid-cols-4 gap-1 mt-1">
+                    {[10, 50, 100].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setExchangeRublesAmount(String(preset));
+                          setExchangeCoinsAmount("");
+                        }}
+                        className="py-1 bg-slate-900 hover:bg-slate-850 text-[9px] font-black rounded-lg border border-white/5 text-gray-300 transition-colors uppercase outline-none"
+                      >
+                        {preset} ₽
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExchangeRublesAmount(String(rubles));
+                        setExchangeCoinsAmount("");
+                      }}
+                      className="py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-[9px] font-black rounded-lg border border-emerald-500/20 text-emerald-400 transition-colors uppercase outline-none"
+                    >
+                      Все
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isExchanging || !exchangeRublesAmount || Number(exchangeRublesAmount) <= 0}
+                    onClick={() => handleExchangeRubles(Number(exchangeRublesAmount))}
+                    className="mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600 text-xs font-black rounded-xl text-white transition-all uppercase tracking-wider outline-none border-none shadow cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    {isExchanging ? "Обработка..." : "Купить коины 💰"}
+                  </button>
+                </div>
+             </div>
+
+             {/* WITHDRAWAL PANEL */}
+             <div className="bg-[#0f172a] border border-white/5 rounded-2xl p-3.5 flex flex-col gap-3 shadow-lg mb-1">
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-[10px] text-white font-black uppercase tracking-wider flex items-center gap-1 font-mono">
+                    <Wallet className="w-4 h-4 text-blue-400" /> Моментальный вывод рублей
+                  </span>
+                  <span className="text-[8.5px] text-gray-500 font-mono">Минимум: 5.00 ₽</span>
+                </div>
+
+                {withdrawStep ? (
+                  <div className="py-6 flex flex-col items-center justify-center text-center gap-3 animate-pulse">
+                    <RefreshCw className="w-7 h-7 text-blue-400 animate-spin" />
+                    <span className="text-xs font-extrabold text-white font-mono uppercase tracking-wide">{withdrawStep}</span>
+                    <span className="text-[9.5px] text-gray-500">Автоматический шлюз VK Coin v1.0.3</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'vkpay', name: 'VK Pay', color: 'border-blue-500 bg-blue-500/10 text-blue-400' },
+                        { id: 'qiwi', name: 'QIWI', color: 'border-[#ff8c00] bg-[#ff8c00]/10 text-[#ff8c00]' },
+                        { id: 'card', name: 'Карта', color: 'border-[#2ecc71] bg-[#2ecc71]/10 text-[#2ecc71]' }
+                      ].map((sys) => (
+                        <button
+                          key={sys.id}
+                          type="button"
+                          onClick={() => setWithdrawSystem(sys.id as any)}
+                          className={`py-2 rounded-xl text-[10px] font-black border uppercase transition-all tracking-wider outline-none flex items-center justify-center cursor-pointer ${
+                            withdrawSystem === sys.id 
+                              ? `${sys.color} font-extrabold shadow` 
+                              : 'border-white/5 bg-slate-900/30 text-gray-400 hover:text-white'
+                          }`}
+                        >
+                          {sys.name}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Реквизиты получателя</span>
+                        <input 
+                          type="text"
+                          placeholder={withdrawSystem === 'card' ? 'Номер карты (16 цифр)...' : 'Номер телефона / Кошелек...'}
+                          value={withdrawDetails}
+                          onChange={(e) => setWithdrawDetails(e.target.value)}
+                          className="w-full bg-slate-950 text-xs text-white p-2 rounded-xl border border-white/5 outline-none focus:border-blue-500/50"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wider">Сумма вывода (₽)</span>
+                        <div className="relative flex items-center">
+                          <input 
+                            type="number"
+                            placeholder="Сумма..."
+                            min="5"
+                            value={withdrawAmount}
+                            onChange={(e) => setWithdrawAmount(e.target.value)}
+                            className="w-full bg-slate-950 text-xs text-white p-2 rounded-xl border border-white/5 outline-none focus:border-blue-500/50 font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setWithdrawAmount(String(rubles))}
+                            className="absolute right-2 text-[9px] bg-blue-500/10 border border-blue-500/20 text-blue-400 px-2 py-0.5 rounded font-black font-mono"
+                          >
+                            Макс
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={isWithdrawing || !withdrawDetails || !withdrawAmount || Number(withdrawAmount) < 5}
+                      onClick={handleWithdrawRubles}
+                      className="py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-40 text-xs font-black rounded-xl text-white transition-all uppercase tracking-widest outline-none border-none shadow cursor-pointer flex items-center justify-center gap-1.5 mt-1"
+                    >
+                      <Wallet className="w-3.5 h-3.5" /> Инициировать моментальный вывод
+                    </button>
+                  </div>
+                )}
+             </div>
+
+             {/* USER WITHDRAWALS HISTORY LIST */}
+             <div className="bg-[#0f172a] border border-white/5 rounded-2xl p-3.5 flex flex-col gap-2.5 shadow-lg">
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-[10px] text-white font-black uppercase tracking-wider flex items-center gap-1 font-mono">
+                    <Clock className="w-4 h-4 text-amber-500" /> История выводов
+                  </span>
+                  <span className="text-[8.5px] text-gray-500 font-mono">Всего: {userWithdrawals.length}</span>
+                </div>
+
+                {userWithdrawals.length === 0 ? (
+                  <div className="py-4 text-center text-[10px] text-gray-500 font-mono">
+                    У вас пока нет заявок на вывод. Накопите 5.00 ₽ и создайте первую!
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 max-h-48 overflow-y-auto pr-1">
+                    {userWithdrawals.map((w) => {
+                      const dateStr = w.createdAt?.seconds 
+                        ? new Date(w.createdAt.seconds * 1000).toLocaleDateString() + ' ' + new Date(w.createdAt.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                        : 'Неизвестно';
+                      
+                      return (
+                        <div key={w.id} className="bg-slate-950/40 border border-white/5 p-2 rounded-xl flex items-center justify-between text-xs font-mono">
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] font-black text-white uppercase bg-slate-900 border border-white/5 px-1.5 py-0.5 rounded">
+                                {w.system === 'vkpay' ? 'VK Pay' : w.system === 'qiwi' ? 'QIWI' : 'Карта'}
+                              </span>
+                              <span className="text-[11px] font-bold text-gray-300">{w.amount?.toFixed(2)} ₽</span>
+                            </div>
+                            <span className="text-[9px] text-gray-500 truncate max-w-[140px] sm:max-w-[200px]">
+                              Рекв: {w.details}
+                            </span>
+                            <span className="text-[8px] text-gray-600">
+                              {dateStr}
+                            </span>
+                          </div>
+
+                          <div>
+                            {w.status === "pending" ? (
+                              <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full animate-pulse">
+                                В обработке 🟡
+                              </span>
+                            ) : w.status === "completed" ? (
+                              <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                                Выплачено 🟢
+                              </span>
+                            ) : (
+                              <div className="flex flex-col items-end gap-0.5">
+                                <span className="text-[9px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">
+                                  Отклонено 🔴
+                                </span>
+                                <span className="text-[8px] text-rose-500 font-semibold font-sans">
+                                  Баланс возвращен
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+             </div>
+          </div>
         )}
       </div>
     );
@@ -4414,45 +5432,54 @@ export default function App() {
     return (
       <div className="flex flex-col h-full min-h-0 text-[#aab7c4]">
         {/* Social navigation tabs */}
-        <div className="grid grid-cols-4 gap-1 bg-slate-950/45 p-1 rounded-xl border border-white/5 mb-3 select-none text-[9px] font-black uppercase">
+        <div className="grid grid-cols-5 gap-0.5 bg-slate-950/45 p-1 rounded-xl border border-white/5 mb-3 select-none text-[8.5px] font-black uppercase tracking-tighter">
           <button
             type="button"
             onClick={() => {
               setActiveSocialTab("players");
               setPlayerSearchQuery("");
             }}
-            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
-              activeSocialTab === "players" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
+            className={`h-9 rounded-lg transition-all text-center flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+              activeSocialTab === "players" ? "bg-[#e67e22] text-white font-extrabold animate-pulse" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <Users className="w-3.5 h-3.5" /> ИГРОКИ
+            <Users className="w-3 h-3" /> ИГРОКИ
           </button>
           <button
             type="button"
             onClick={() => setActiveSocialTab("clans")}
-            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "clans" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <Shield className="w-3.5 h-3.5" /> КЛАНЫ
+            <Shield className="w-3 h-3" /> КЛАНЫ
           </button>
           <button
             type="button"
             onClick={() => setActiveSocialTab("friends")}
-            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "friends" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <Star className="w-3.5 h-3.5" /> ДРУЗЬЯ {friendsList.length > 0 ? `(${friendsList.length})` : ""}
+            <Star className="w-3 h-3" /> ДРУЗЬЯ
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSocialTab("referrals")}
+            className={`h-9 rounded-lg transition-all text-center flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+              activeSocialTab === "referrals" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
+            }`}
+          >
+            <Gift className="w-3 h-3" /> РЕФЕРАЛЫ
           </button>
           <button
             type="button"
             onClick={() => setActiveSocialTab("leaderboard")}
-            className={`h-9 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+            className={`h-9 rounded-lg transition-all text-center flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer border-none outline-none ${
               activeSocialTab === "leaderboard" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <Trophy className="w-3.5 h-3.5" /> ТОП-10
+            <Trophy className="w-3 h-3" /> ТОП-10
           </button>
         </div>
 
@@ -4724,12 +5751,21 @@ export default function App() {
                     <span className="text-sm font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2">
                        Мой Клан: {playerClan}
                     </span>
-                    <button 
-                      onClick={handleLeaveClan}
-                      className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer border-none outline-none"
-                    >
-                      Покинуть ✕
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setShowClanQrModal(playerClan)}
+                        className="px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer border-none outline-none flex items-center gap-1"
+                        title="Показать QR-код клана"
+                      >
+                        <QrCode className="w-3.5 h-3.5" /> QR Код
+                      </button>
+                      <button 
+                        onClick={handleLeaveClan}
+                        className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer border-none outline-none"
+                      >
+                        Покинуть ✕
+                      </button>
+                    </div>
                   </div>
 
                   {/* Tabs matching the diagram: "игроки" and "предметы" under the 'тип клан' format */}
@@ -4903,11 +5939,21 @@ export default function App() {
                           <span className="text-[#ffd966] font-black text-sm flex items-center gap-1.5">
                             🏰 {clanName} {isPrivCl ? "🔒" : "🌐"}
                           </span>
-                          {hasMeJoined && (
-                            <span className="text-[9px] bg-emerald-600 text-white px-2.5 py-0.5 rounded-full font-bold shadow-inner">
-                              Мой Клан
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowClanQrModal(clanName)}
+                              className="p-1.5 bg-slate-950 border border-white/5 hover:border-[#e67e22]/30 rounded-lg text-gray-400 hover:text-white cursor-pointer transition-colors outline-none"
+                              title="Показать QR-код клана"
+                            >
+                              <QrCode className="w-3.5 h-3.5" />
+                            </button>
+                            {hasMeJoined && (
+                              <span className="text-[9px] bg-emerald-600 text-white px-2.5 py-0.5 rounded-full font-bold shadow-inner">
+                                Мой Клан
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         <div className="flex flex-col gap-1.5 border-t border-white/5 pt-2 text-xs">
@@ -5110,9 +6156,477 @@ export default function App() {
             </div>
           )}
 
+          {activeSocialTab === "referrals" && (() => {
+            const refLink = `${window.location.origin}/?ref=${currentUser?.uid || ""}`;
+            return (
+              <div className="flex flex-col gap-4 animate-fade-in pb-10">
+                {/* Promo Header Banner */}
+                <div className="relative bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 border border-indigo-500/20 rounded-2xl p-4 overflow-hidden shadow-xl">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl -mr-5 -mt-5" />
+                  <div className="flex items-center gap-3 relative z-10">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center text-indigo-400 border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)] text-lg">
+                      🎁
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-black uppercase text-white tracking-wider font-sans">
+                        Приглашайте друзей и зарабатывайте!
+                      </h3>
+                      <p className="text-[10px] text-indigo-200 mt-0.5 leading-tight font-medium">
+                        Вы получаете <span className="text-amber-400 font-extrabold">100 000 коинов</span> за каждого друга.
+                        Друг получает <span className="text-emerald-400 font-extrabold">50 000 коинов</span> на старт!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Main Stats Grid */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="bg-slate-950/40 border border-white/5 rounded-2xl p-3 flex flex-col justify-between">
+                    <span className="text-[9px] text-gray-400 font-bold uppercase tracking-wider">Приглашено</span>
+                    <span className="text-base font-black text-white mt-1 font-mono">
+                      {userReferrals.length} <span className="text-xs text-gray-500 font-medium font-sans">чел.</span>
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/40 border border-white/5 rounded-2xl p-3 flex flex-col justify-between">
+                    <span className="text-[9px] text-amber-400 font-bold uppercase tracking-wider">Заработано</span>
+                    <span className="text-base font-black text-amber-400 mt-1 font-mono">
+                      {(userReferrals.length * 100000).toLocaleString()} <span className="text-[10px] text-gray-500 font-sans">💰</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* INVITE OPTIONS TRIGGERS */}
+                <div className="bg-slate-900/60 border border-white/5 rounded-2xl p-4 flex flex-col gap-3.5 shadow-md">
+                  <div className="flex justify-between items-center pb-2 border-b border-white/5">
+                    <h4 className="text-[10px] text-white font-black uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <UserPlus className="w-4 h-4 text-[#e67e22]" /> Пригласительная Система
+                    </h4>
+                    <span className="text-[8px] text-gray-500 font-mono">ID: {currentUser?.uid.slice(0, 8)}...</span>
+                  </div>
+
+                  {/* Toggle Invitation Actions */}
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsInviteOptionsOpen(!isInviteOptionsOpen)}
+                      className="w-full py-3 bg-[#e67e22] hover:bg-[#d35400] text-white font-black text-xs uppercase tracking-widest rounded-xl shadow-lg border-none cursor-pointer transition-all flex items-center justify-center gap-2"
+                    >
+                      👥 Пригласить друга {!isInviteOptionsOpen ? "▼" : "▲"}
+                    </button>
+
+                    {/* Sub-buttons Panel with smooth motion layout */}
+                    {isInviteOptionsOpen && (
+                      <div className="grid grid-cols-3 gap-2 mt-1 animate-fade-in">
+                        {/* Button 1: Give QR Code */}
+                        <button
+                          type="button"
+                          onClick={() => setShowQrModal(true)}
+                          className="flex flex-col items-center justify-center gap-1.5 p-2.5 bg-slate-950 border border-white/5 hover:border-[#e67e22]/20 rounded-xl cursor-pointer text-center outline-none transition-colors group"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 text-blue-400 flex items-center justify-center">
+                            <QrCode className="w-4 h-4" />
+                          </div>
+                          <span className="text-[8px] font-black uppercase text-gray-300 group-hover:text-white leading-none">
+                            QR Код
+                          </span>
+                        </button>
+
+                        {/* Button 2: Scan QR */}
+                        <button
+                          type="button"
+                          onClick={() => setIsScanModalOpen(true)}
+                          className="flex flex-col items-center justify-center gap-1.5 p-2.5 bg-slate-950 border border-white/5 hover:border-[#e67e22]/20 rounded-xl cursor-pointer text-center outline-none transition-colors group"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 group-hover:bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                            <Camera className="w-4 h-4" />
+                          </div>
+                          <span className="text-[8px] font-black uppercase text-gray-300 group-hover:text-white leading-none">
+                            Сканировать
+                          </span>
+                        </button>
+
+                        {/* Button 3: Share */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (navigator.share) {
+                              navigator.share({
+                                title: 'Клик Клан',
+                                text: 'Присоединяйся к моей игре в Клик Клан и получи 50,000 монет на старт!',
+                                url: refLink
+                              }).catch(err => console.warn(err));
+                            } else {
+                              navigator.clipboard.writeText(refLink);
+                              addToast("📋 Реферальная ссылка скопирована в буфер обмена!");
+                            }
+                          }}
+                          className="flex flex-col items-center justify-center gap-1.5 p-2.5 bg-slate-950 border border-white/5 hover:border-[#e67e22]/20 rounded-xl cursor-pointer text-center outline-none transition-colors group"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-amber-500/10 group-hover:bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                            <Share2 className="w-4 h-4" />
+                          </div>
+                          <span className="text-[8px] font-black uppercase text-gray-300 group-hover:text-white leading-none">
+                            Поделиться
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* My Inviter Details */}
+                <div className="bg-slate-900/60 border border-white/5 rounded-2xl p-4 flex flex-col gap-3 shadow-md">
+                  <h4 className="text-[10px] text-white font-black uppercase tracking-wider font-mono flex items-center gap-1.5">
+                    🔑 Мой пригласитель
+                  </h4>
+
+                  {myReferrer ? (
+                    <div className="bg-black/20 border border-white/5 rounded-xl p-3 flex items-center justify-between gap-3 font-mono text-xs font-semibold">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-[10px] text-emerald-400 font-black">
+                          ✓
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-white font-extrabold font-sans">Код принят</span>
+                          <span className="text-[10px] text-gray-500">ID: {myReferrer}</span>
+                        </div>
+                      </div>
+                      <span className="text-emerald-400 text-[10px] font-black tracking-wide uppercase bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                        +50,000 монет
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-[10px] text-gray-400 leading-tight">
+                        Если у вас есть код пригласителя, введите его вручную или отсканируйте камерой, чтобы получить бонус!
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Введите ID или ссылку пригласителя..."
+                          value={referralCodeInput}
+                          onChange={(e) => setReferralCodeInput(e.target.value)}
+                          className="flex-1 px-3 py-2 bg-black/40 border border-white/5 rounded-xl text-xs text-white placeholder-gray-500 outline-none focus:border-[#e67e22]/50 font-mono font-bold"
+                        />
+                        <button
+                          type="button"
+                          disabled={isSubmittingReferral || !referralCodeInput.trim()}
+                          onClick={() => handleApplyReferrer(referralCodeInput)}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black text-xs uppercase tracking-wide rounded-xl outline-none border-none cursor-pointer transition-colors"
+                        >
+                          {isSubmittingReferral ? "..." : "Ввести"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* My Referrals List */}
+                <div className="bg-slate-900/60 border border-white/5 rounded-2xl p-4 flex flex-col gap-3 shadow-md">
+                  <h4 className="text-[10px] text-white font-black uppercase tracking-wider font-mono flex items-center gap-1.5 border-b border-white/5 pb-2">
+                    👥 Ваши рефералы ({userReferrals.length})
+                  </h4>
+
+                  {userReferrals.length === 0 ? (
+                    <div className="text-center py-10 text-gray-500 font-sans text-xs">
+                      Вы еще никого не пригласили. Поделитесь кодом прямо сейчас!
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
+                      {userReferrals.map((r, idx) => (
+                        <div
+                          key={r.id || idx}
+                          className="bg-black/20 border border-white/5 rounded-xl p-2.5 flex items-center justify-between gap-2.5"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-8 h-8 rounded-full border border-white/5 overflow-hidden bg-slate-950 flex-shrink-0">
+                              {r.photoURL ? (
+                                <img
+                                  referrerPolicy="no-referrer"
+                                  src={r.photoURL}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-xs font-black text-[#e67e22] uppercase">
+                                  {(r.playerName || "И").slice(0, 1)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs font-black text-white truncate leading-tight">
+                                {r.playerName || "Игрок"}
+                              </span>
+                              <span className="text-[8.5px] text-gray-500 font-mono leading-none mt-0.5">
+                                ID: {r.id ? r.id.slice(0, 8) : "---"}...
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-right font-mono text-xs flex-shrink-0">
+                            <div className="text-amber-400 font-extrabold">
+                              +100,000 <span className="text-[10px] font-sans">💰</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* SCAN MODAL */}
+                {isScanModalOpen && (
+                  <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                    <div className="bg-[#0f172a] border border-white/10 w-full max-w-sm rounded-3xl p-5 flex flex-col gap-4 relative shadow-2xl animate-scale-up">
+                      <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                        <span className="text-xs font-black uppercase tracking-wider text-white">
+                          Сканировать QR-код
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsScanModalOpen(false)}
+                          className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Camera Scanner Viewport */}
+                      <div className="relative">
+                        <div
+                          id="qr-reader"
+                          className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500"
+                        >
+                          Запуск камеры...
+                        </div>
+                        {/* Target frame decoration */}
+                        <div className="absolute inset-x-12 inset-y-12 border-2 border-emerald-500/40 rounded-2xl pointer-events-none animate-pulse flex items-center justify-center">
+                          <div className="w-4 h-4 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
+                          <div className="w-4 h-4 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
+                          <div className="w-4 h-4 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
+                          <div className="w-4 h-4 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
+                        </div>
+                      </div>
+
+                      {/* Image Upload Trigger */}
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] text-gray-400 text-center uppercase font-bold tracking-wide">
+                          Или выберите скриншот QR-кода
+                        </span>
+                        <label className="w-full py-2.5 bg-slate-900 border border-white/5 hover:border-[#e67e22]/20 text-white font-black text-[10px] uppercase tracking-wider rounded-xl text-center cursor-pointer transition-all">
+                          📂 Выбрать скриншот
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleQrImageUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* QR CODE DISPLAY MODAL */}
+                {showQrModal && (
+                  <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                    <div className="bg-[#0f172a] border border-white/10 w-full max-w-xs rounded-3xl p-5 flex flex-col items-center gap-4 relative shadow-2xl animate-scale-up">
+                      <div className="flex justify-between items-center border-b border-white/5 pb-2 w-full">
+                        <span className="text-xs font-black uppercase tracking-wider text-white">
+                          Ваш пригласительный QR
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowQrModal(false)}
+                          className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="bg-white p-3 rounded-2xl shadow-xl w-56 h-56 flex items-center justify-center border border-white/10">
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(refLink)}`}
+                          alt="Referral QR Code"
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+
+                      <div className="text-center flex flex-col gap-1 max-w-xs">
+                        <span className="text-[10px] text-gray-400 uppercase font-black tracking-wide leading-none">
+                          Пусть друг отсканирует
+                        </span>
+                        <span className="text-[9px] text-gray-500 font-mono leading-normal select-all">
+                          {refLink}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(refLink);
+                          addToast("📋 Реферальная ссылка скопирована в буфер обмена!");
+                        }}
+                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-xl outline-none border-none cursor-pointer transition-colors text-center"
+                      >
+                        Скопировать ссылку
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hidden QR Dummy container for image scanner library */}
+                <div id="qr-reader-dummy" className="hidden" />
+              </div>
+            );
+          })()}
+
           {activeSocialTab === "leaderboard" && (
             <Leaderboard currentUserId={effectivePlayerId} addToast={addToast} />
           )}
+
+          {/* CLAN QR CODE DISPLAY MODAL */}
+          {showClanQrModal && (() => {
+            const clanJoinLink = `${window.location.origin}/?clan=${encodeURIComponent(showClanQrModal)}`;
+            return (
+              <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+                <div className="bg-[#0f172a] border border-white/10 w-full max-w-xs rounded-3xl p-5 flex flex-col items-center gap-4 relative shadow-2xl animate-scale-up">
+                  <div className="flex justify-between items-center border-b border-white/5 pb-2 w-full">
+                    <span className="text-xs font-black uppercase tracking-wider text-white">
+                      QR-код клана {showClanQrModal}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowClanQrModal(null)}
+                      className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="bg-white p-3 rounded-2xl shadow-xl w-56 h-56 flex items-center justify-center border border-white/10">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(clanJoinLink)}`}
+                      alt="Clan QR Code"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+
+                  <div className="text-center flex flex-col gap-1 max-w-xs">
+                    <span className="text-[10px] text-gray-400 uppercase font-black tracking-wide leading-none">
+                      Отсканируйте для вступления
+                    </span>
+                    <span className="text-[9px] text-gray-500 font-mono leading-normal select-all break-all">
+                      {clanJoinLink}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(clanJoinLink);
+                      addToast("📋 Ссылка на вступление скопирована!");
+                    }}
+                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-xl outline-none border-none cursor-pointer transition-colors text-center"
+                  >
+                    Скопировать ссылку
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* CLAN JOIN INVITATION MODAL */}
+          {pendingClanInvite && (() => {
+            const isPrivate = clansPrivacy.find(c => c.name === pendingClanInvite)?.isPrivate;
+            return (
+              <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[70] flex items-center justify-center p-4">
+                <div className="bg-[#0f172a] border border-[#e67e22]/30 w-full max-w-sm rounded-3xl p-6 flex flex-col gap-4 relative shadow-2xl animate-scale-up text-[#aab7c4]">
+                  <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                    <span className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-1.5 font-sans">
+                      🏰 Приглашение в клан!
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingClanInvite(null)}
+                      className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="text-center py-2 flex flex-col gap-1">
+                    <p className="text-xs font-medium text-gray-300">
+                      Вас приглашают присоединиться к клану:
+                    </p>
+                    <p className="text-xl font-black text-white uppercase tracking-wider font-mono">
+                      {pendingClanInvite}
+                    </p>
+                    {isPrivate && (
+                      <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wide bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 self-center mt-1">
+                        🔒 Приватный клан
+                      </span>
+                    )}
+                  </div>
+
+                  {isPrivate && (
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Пароль для входа:</label>
+                      <input
+                        type="password"
+                        placeholder="Введите пароль..."
+                        value={pendingClanPassword}
+                        onChange={(e) => setPendingClanPassword(e.target.value)}
+                        className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 outline-none focus:border-[#e67e22]/50 font-sans"
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingClanInvite(null);
+                        setPendingClanPassword("");
+                      }}
+                      className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer border-none outline-none transition-colors"
+                    >
+                      Отмена
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (playerClan) {
+                          addToast("⚠️ Сначала покиньте ваш текущий клан!");
+                          return;
+                        }
+                        if (isPrivate && !pendingClanPassword.trim()) {
+                          addToast("⚠️ Введите пароль клана!");
+                          return;
+                        }
+                        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                          socketRef.current.send(JSON.stringify({
+                            type: "join_clan",
+                            data: {
+                              id: effectivePlayerId,
+                              clanName: pendingClanInvite,
+                              password: isPrivate ? pendingClanPassword : ""
+                            }
+                          }));
+                          setPendingClanInvite(null);
+                          setPendingClanPassword("");
+                        } else {
+                          addToast("⚠️ Нет подключения к серверу.");
+                        }
+                      }}
+                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer border-none outline-none transition-colors"
+                    >
+                      Вступить ⚔️
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -5378,7 +6892,7 @@ export default function App() {
               <span>{opponentClan}</span>
               {isOpponentBot && (
                 <span className="text-[8px] bg-orange-500/15 text-orange-400 font-extrabold px-1.5 py-0.5 rounded-md border border-orange-500/20 uppercase tracking-wider font-mono scale-[0.85] mt-0.5">
-                  🤖 Бот-соперник
+                  🤖 Бот-соперник (ур. 5)
                 </span>
               )}
             </div>
@@ -5386,7 +6900,7 @@ export default function App() {
               🏆 {scoresRight.toLocaleString()}
             </div>
             <div className="text-[9px] text-gray-400 font-mono mt-0.5 font-bold">
-              Ряды бойцов: {isOpponentBot ? "8" : "15"} человек
+              Ряды бойцов: {isOpponentBot ? "8 (ур. 5)" : "15"} человек
             </div>
 
             <div className="mt-2 bg-orange-500/10 border border-orange-500/15 py-1 px-2 rounded-xl flex items-center gap-1">

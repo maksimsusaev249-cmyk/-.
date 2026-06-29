@@ -41,6 +41,22 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of initialization" }
       },
       "required": ["title", "description", "price", "sellerId", "sellerName", "status", "itemImage"]
+    },
+    "UserAction": {
+      "title": "UserAction",
+      "description": "Historical log entry of user activity and profile parameters for administrator tracking.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the user who performed the action" },
+        "playerName": { "type": "string", "description": "Name of the user" },
+        "coins": { "type": "number", "description": "Coins balance at the moment of the action" },
+        "totalClicks": { "type": "number", "description": "Total clicks at the moment of action" },
+        "playerClan": { "type": "string", "description": "The clan name of the player" },
+        "friendsCount": { "type": "number", "description": "Number of friends the player has" },
+        "action": { "type": "string", "description": "Description of the action performed" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Timestamp of the action" }
+      },
+      "required": ["userId", "playerName", "coins", "totalClicks", "action", "timestamp"]
     }
   },
   "firestore": {
@@ -51,6 +67,10 @@
     "/marketplace/{listingId}": {
       "schema": "MarketplaceListing",
       "description": "Active listings directory of general P2P items traded by players"
+    },
+    "/user_actions/{actionId}": {
+      "schema": "UserAction",
+      "description": "Historical stream of player actions and stats logged for admin auditing"
     }
   }
 }

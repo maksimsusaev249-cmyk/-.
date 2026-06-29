@@ -411,6 +411,14 @@ function broadcastClanWarState() {
   });
 }
 
+function getPlayerLevel(clicks: number) {
+  let lvl = 1;
+  while (clicks >= lvl * (lvl + 1) * 35) {
+    lvl++;
+  }
+  return lvl;
+}
+
 function calculateClanProduction() {
   const scores: { [clanName: string]: number } = {};
   for (const player of players.values()) {
@@ -1045,7 +1053,7 @@ httpServer.on("upgrade", (request, socket, head) => {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request);
     });
-  } else {
+  } else if (process.env.NODE_ENV === "production") {
     socket.destroy();
   }
 });
@@ -2756,7 +2764,10 @@ async function start() {
   if (process.env.NODE_ENV !== "production") {
     // Development Mode
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: { server: httpServer }
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -2930,8 +2941,16 @@ async function start() {
             const triggeringClanName = clanWarState.triggeringClan || "ЛЕГЕНДЫ";
             const currentSeeded = Object.keys(clanWarState.clansWarPoints);
             const userOpponents = currentSeeded.filter(c => c !== triggeringClanName);
-            if (userOpponents.length === 0) {
-              // No other user-created clans exist, so make sure we seed our primary balanced rival bots!
+            
+            // Determine if there is any player in the triggering clan with level <= 5
+            const triggeringClanPlayers = Array.from(players.values()).filter(p => p.clan === triggeringClanName);
+            const hasInitialLevelPlayer = triggeringClanPlayers.length === 0 || triggeringClanPlayers.some(p => {
+              const lvl = getPlayerLevel(p.clicks || 0);
+              return lvl <= 5;
+            });
+
+            if (userOpponents.length === 0 || hasInitialLevelPlayer) {
+              // Seed our primary balanced rival bots!
               clanWarState.clansWarPoints["ТЁМНЫЕ ВОЛКИ"] = 0;
               clanWarState.clansWarPoints["КРАСНЫЕ ДРАКОНЫ"] = 0;
             }

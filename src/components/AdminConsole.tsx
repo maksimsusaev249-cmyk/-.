@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { collection, getDocs, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
+import { collection, getDocs, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, onSnapshot, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { handleFirestoreError, OperationType } from "../utils/firebaseUtils";
 import { getApiUrl } from "../utils/api";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, BarChart, Bar, Cell, Legend } from "recharts";
-import { Users, LayoutDashboard, Settings2, Trash2, ShieldAlert, Award, ArrowLeft, MessageSquare, Store, CheckCircle, Clock, Send, AlertCircle, RefreshCw, Settings } from "lucide-react";
+import { Users, LayoutDashboard, Settings2, Trash2, ShieldAlert, Award, ArrowLeft, MessageSquare, Store, CheckCircle, Clock, Send, AlertCircle, RefreshCw, Settings, Wallet } from "lucide-react";
 
 interface AdminConsoleProps {
   onClose: () => void;
@@ -12,10 +12,12 @@ interface AdminConsoleProps {
 }
 
 export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast }) => {
-  const [activeTab, setActiveTab] = useState<"dashboard" | "players" | "actions" | "support" | "store" | "settings" | "clans">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "players" | "actions" | "withdrawals" | "support" | "store" | "settings" | "clans">("dashboard");
   const [players, setPlayers] = useState<any[]>([]);
   const [supportTickets, setSupportTickets] = useState<any[]>([]);
   const [marketplaceListings, setMarketplaceListings] = useState<any[]>([]);
+  const [withdrawals, setWithdrawals] = useState<any[]>([]);
+  const [isProcessingWithdrawalId, setIsProcessingWithdrawalId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Clans Audit states
@@ -93,6 +95,176 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
     message: string;
     onConfirm: () => void;
   } | null>(null);
+
+  // States for player actions history & calendar selection
+  const [actionsSubTab, setActionsSubTab] = useState<"manage" | "history">("manage");
+  const [userActions, setUserActions] = useState<any[]>([]);
+  const [actionStartDate, setActionStartDate] = useState<string>(() => {
+    // Default to 7 days ago
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toISOString().split("T")[0];
+  });
+  const [actionEndDate, setActionEndDate] = useState<string>(() => {
+    // Default to today
+    return new Date().toISOString().split("T")[0];
+  });
+  const [actionSearchTerm, setActionSearchTerm] = useState("");
+  const [actionSortField, setActionSortField] = useState<"timestamp" | "coins" | "totalClicks" | "friendsCount">("timestamp");
+  const [actionSortOrder, setActionSortOrder] = useState<"desc" | "asc">("desc");
+
+  // Real-time Firestore subscription to user actions
+  useEffect(() => {
+    if (activeTab === "actions" && actionsSubTab === "history") {
+      const unsub = onSnapshot(collection(db, "user_actions"), (snap) => {
+        const list: any[] = [];
+        snap.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() });
+        });
+        setUserActions(list);
+      }, (err) => {
+        console.error("Failed to fetch user actions:", err);
+      });
+      return () => unsub();
+    }
+  }, [activeTab, actionsSubTab]);
+
+  // Real-time Firestore subscription to all withdrawals
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "withdrawals"), (snap) => {
+      const list: any[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...d.data() });
+      });
+      // Sort newest first
+      list.sort((a, b) => {
+        const timeA = a.createdAt?.seconds || a.createdAt?.toMillis?.() || 0;
+        const timeB = b.createdAt?.seconds || b.createdAt?.toMillis?.() || 0;
+        return timeB - timeA;
+      });
+      setWithdrawals(list);
+    }, (err) => {
+      console.error("Failed to listen to withdrawals:", err);
+    });
+    return () => unsub();
+  }, []);
+
+  const handleApproveWithdrawal = async (withdrawalId: string, playerName: string, amount: number) => {
+    addToast("🔄 Одобрение выплаты...");
+    setIsProcessingWithdrawalId(withdrawalId);
+    try {
+      const wRef = doc(db, "withdrawals", withdrawalId);
+      await updateDoc(wRef, { status: "completed" });
+
+      // Log to actions
+      await addDoc(collection(db, "user_actions"), {
+        userId: "admin",
+        playerName: "Администратор",
+        action: "Одобрение выплаты",
+        coins: 0,
+        details: `Выплата для ${playerName} на сумму ${amount.toFixed(2)} ₽ успешно одобрена и проведена`,
+        timestamp: serverTimestamp()
+      });
+
+      addToast("✅ Выплата успешно одобрена!");
+    } catch (err: any) {
+      console.error("Error approving withdrawal:", err);
+      addToast(`⚠️ Ошибка: ${err.message || "Не удалось одобрить"}`);
+    } finally {
+      setIsProcessingWithdrawalId(null);
+    }
+  };
+
+  const handleRejectWithdrawal = async (withdrawalId: string, userId: string, playerName: string, amount: number) => {
+    addToast("🔄 Отклонение выплаты и возврат средств...");
+    setIsProcessingWithdrawalId(withdrawalId);
+    try {
+      // 1. Update withdrawal status
+      const wRef = doc(db, "withdrawals", withdrawalId);
+      await updateDoc(wRef, { status: "rejected" });
+
+      // 2. Refund rubles to player
+      const userRef = doc(db, "users", userId);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        const currentRubles = typeof userSnap.data().rubles === "number" ? userSnap.data().rubles : 0;
+        const refundedRubles = parseFloat((currentRubles + amount).toFixed(4));
+        await updateDoc(userRef, { rubles: refundedRubles });
+      } else {
+        await setDoc(userRef, { rubles: amount }, { merge: true });
+      }
+
+      // Log to actions
+      await addDoc(collection(db, "user_actions"), {
+        userId: "admin",
+        playerName: "Администратор",
+        action: "Отклонение выплаты",
+        coins: 0,
+        details: `Выплата для ${playerName} на сумму ${amount.toFixed(2)} ₽ отклонена. Средства возвращены на баланс.`,
+        timestamp: serverTimestamp()
+      });
+
+      addToast("✅ Выплата отклонена, рубли возвращены игроку!");
+    } catch (err: any) {
+      console.error("Error rejecting withdrawal:", err);
+      addToast(`⚠️ Ошибка: ${err.message || "Не удалось отклонить"}`);
+    } finally {
+      setIsProcessingWithdrawalId(null);
+    }
+  };
+
+  // Filter and sort the logged actions based on date, search term and sort fields
+  const filteredAndSortedActions = React.useMemo(() => {
+    let result = [...userActions];
+
+    // Filter by start date
+    if (actionStartDate) {
+      const startMs = new Date(actionStartDate + "T00:00:00").getTime();
+      result = result.filter(act => {
+        const actMs = act.timestamp?.toMillis ? act.timestamp.toMillis() : (act.timestamp ? new Date(act.timestamp).getTime() : 0);
+        return actMs >= startMs;
+      });
+    }
+
+    // Filter by end date
+    if (actionEndDate) {
+      const endMs = new Date(actionEndDate + "T23:59:59").getTime();
+      result = result.filter(act => {
+        const actMs = act.timestamp?.toMillis ? act.timestamp.toMillis() : (act.timestamp ? new Date(act.timestamp).getTime() : 0);
+        return actMs <= endMs;
+      });
+    }
+
+    // Filter by search term (player name, UID, or action type)
+    if (actionSearchTerm.trim()) {
+      const term = actionSearchTerm.toLowerCase();
+      result = result.filter(act => 
+        (act.playerName || "").toLowerCase().includes(term) || 
+        (act.userId || "").toLowerCase().includes(term) ||
+        (act.action || "").toLowerCase().includes(term)
+      );
+    }
+
+    // Sort the list
+    result.sort((a, b) => {
+      let valA: any = 0;
+      let valB: any = 0;
+
+      if (actionSortField === "timestamp") {
+        valA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.timestamp ? new Date(a.timestamp).getTime() : 0);
+        valB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.timestamp ? new Date(b.timestamp).getTime() : 0);
+      } else {
+        valA = a[actionSortField] || 0;
+        valB = b[actionSortField] || 0;
+      }
+
+      if (valA < valB) return actionSortOrder === "asc" ? -1 : 1;
+      if (valA > valB) return actionSortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return result;
+  }, [userActions, actionStartDate, actionEndDate, actionSearchTerm, actionSortField, actionSortOrder]);
 
   const fetchConfig = async () => {
     try {
@@ -544,6 +716,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border-none outline-none cursor-pointer ${activeTab === "store" ? "bg-amber-500/20 text-amber-400" : "text-gray-400 hover:bg-white/5"}`}
           >
             <Store className="w-4 h-4" /> Магазин
+          </button>
+          <button 
+            onClick={() => setActiveTab("withdrawals")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border-none outline-none cursor-pointer ${activeTab === "withdrawals" ? "bg-emerald-500/20 text-emerald-400" : "text-gray-400 hover:bg-white/5"}`}
+          >
+            <Wallet className="w-4 h-4" /> Выплаты рубли
           </button>
           <button 
             onClick={() => setActiveTab("settings")}
@@ -1202,39 +1380,241 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
               })()}
 
               {activeTab === "actions" && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in">
-                  {players.map(p => (
-                    <div key={p.id} className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col gap-3">
-                      <div className="flex justify-between items-start">
-                        <div className="flex flex-col">
-                          <span className="font-bold text-white uppercase">{p.playerName || "Игрок"}</span>
-                          <span className="text-[10px] text-gray-500 font-mono">{p.id}</span>
+                <div className="flex flex-col gap-6 animate-fade-in">
+                  {/* Actions Sub-tabs */}
+                  <div className="flex items-center gap-2 border-b border-white/5 pb-4 select-none">
+                    <button
+                      onClick={() => setActionsSubTab("manage")}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all border-none outline-none cursor-pointer uppercase tracking-wider ${
+                        actionsSubTab === "manage"
+                          ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20"
+                          : "text-gray-400 hover:text-white bg-white/5 hover:bg-white/10"
+                      }`}
+                    >
+                      ⚡ Быстрые действия
+                    </button>
+                    <button
+                      onClick={() => setActionsSubTab("history")}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all border-none outline-none cursor-pointer flex items-center gap-1.5 uppercase tracking-wider ${
+                        actionsSubTab === "history"
+                          ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20"
+                          : "text-gray-400 hover:text-white bg-white/5 hover:bg-white/10"
+                      }`}
+                    >
+                      📅 История & Рейтинг
+                    </button>
+                  </div>
+
+                  {actionsSubTab === "manage" && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {players.map(p => (
+                        <div key={p.id} className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col gap-3">
+                          <div className="flex justify-between items-start">
+                            <div className="flex flex-col">
+                              <span className="font-bold text-white uppercase">{p.playerName || "Игрок"}</span>
+                              <span className="text-[10px] text-gray-500 font-mono">{p.id}</span>
+                            </div>
+                            <span className="bg-amber-500/20 text-amber-400 text-[10px] font-black px-2 py-0.5 rounded-md">Баланс: {Math.floor(p.coins||0)}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => handleGiveCoins(p.id, (p.coins || 0) + 100000)}
+                              className="flex-1 py-2 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border-none outline-none"
+                            >
+                              + 100K 💰
+                            </button>
+                            <button 
+                              onClick={() => handleGiveCoins(p.id, 0)}
+                              className="flex-1 py-2 bg-orange-600/20 hover:bg-orange-600 text-orange-400 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border-none outline-none"
+                            >
+                              Обнулить 💸
+                            </button>
+                            <button 
+                              onClick={() => handleDeletePlayer(p.id)}
+                              className="w-10 flex items-center justify-center bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition-colors cursor-pointer border-none outline-none"
+                              title="Удалить насовсем"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                        <span className="bg-amber-500/20 text-amber-400 text-[10px] font-black px-2 py-0.5 rounded-md">Баланс: {Math.floor(p.coins||0)}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {actionsSubTab === "history" && (
+                    <div className="flex flex-col gap-5">
+                      {/* Filter Controls Panel */}
+                      <div className="bg-[#111827] border border-white/5 rounded-2xl p-5 flex flex-col gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                          {/* Calendar Selectors */}
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Дата начала (Календарь):</span>
+                            <input
+                              type="date"
+                              value={actionStartDate}
+                              onChange={(e) => setActionStartDate(e.target.value)}
+                              className="bg-black/50 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-rose-500/50 outline-none transition-colors"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Дата завершения (Календарь):</span>
+                            <input
+                              type="date"
+                              value={actionEndDate}
+                              onChange={(e) => setActionEndDate(e.target.value)}
+                              className="bg-black/50 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-rose-500/50 outline-none transition-colors"
+                            />
+                          </div>
+
+                          {/* Search Term */}
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Игрок или действие:</span>
+                            <input
+                              type="text"
+                              placeholder="Имя, ID или действие..."
+                              value={actionSearchTerm}
+                              onChange={(e) => setActionSearchTerm(e.target.value)}
+                              className="bg-black/50 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-rose-500/50 outline-none placeholder-gray-600 transition-colors"
+                            />
+                          </div>
+
+                          {/* Sort Selector */}
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Сортировать рейтинг по:</span>
+                            <div className="flex gap-2">
+                              <select
+                                value={actionSortField}
+                                onChange={(e: any) => setActionSortField(e.target.value)}
+                                className="flex-1 bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:border-rose-500/50 outline-none transition-colors"
+                              >
+                                <option value="timestamp">Времени действия</option>
+                                <option value="coins">Количеству монет (Рейтинг)</option>
+                                <option value="totalClicks">Количеству кликов</option>
+                                <option value="friendsCount">Количеству друзей</option>
+                              </select>
+                              <button
+                                onClick={() => setActionSortOrder(prev => prev === "asc" ? "desc" : "asc")}
+                                className="px-3 bg-black/50 border border-white/10 hover:border-rose-500/30 text-rose-400 hover:text-white rounded-xl transition-all cursor-pointer text-xs font-bold"
+                                title="Переключить направление"
+                              >
+                                {actionSortOrder === "asc" ? "▲" : "▼"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Aggregated Quick Information inside selected range */}
+                        <div className="flex items-center gap-4 bg-black/20 p-3.5 rounded-xl border border-white/5 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-gray-500 uppercase font-bold">Действий найдено:</span>
+                            <span className="text-xs font-black text-rose-400">{filteredAndSortedActions.length}</span>
+                          </div>
+                          <div className="w-px h-3 bg-white/10 hidden sm:block" />
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-gray-500 uppercase font-bold">Максимально монет:</span>
+                            <span className="text-xs font-black text-amber-400">
+                              {Math.floor(Math.max(0, ...filteredAndSortedActions.map(a => a.coins || 0))).toLocaleString()} 💰
+                            </span>
+                          </div>
+                          <div className="w-px h-3 bg-white/10 hidden sm:block" />
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-gray-500 uppercase font-bold">Дата-фильтр:</span>
+                            <span className="text-[10px] font-mono text-gray-300">
+                              {actionStartDate || "—"} / {actionEndDate || "—"}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => handleGiveCoins(p.id, (p.coins || 0) + 100000)}
-                          className="flex-1 py-2 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border-none outline-none"
-                        >
-                          + 100K 💰
-                        </button>
-                        <button 
-                          onClick={() => handleGiveCoins(p.id, 0)}
-                          className="flex-1 py-2 bg-orange-600/20 hover:bg-orange-600 text-orange-400 hover:text-white rounded-lg text-xs font-bold transition-colors cursor-pointer border-none outline-none"
-                        >
-                          Обнулить 💸
-                        </button>
-                        <button 
-                          onClick={() => handleDeletePlayer(p.id)}
-                          className="w-10 flex items-center justify-center bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition-colors cursor-pointer border-none outline-none"
-                          title="Удалить насовсем"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+
+                      {/* Main Ratings Table of Actions */}
+                      <div className="bg-[#111827] border border-white/5 rounded-2xl overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="border-b border-white/5 bg-black/20 text-gray-400 text-[10px] font-black uppercase tracking-wider select-none">
+                                <th className="px-5 py-4 font-black">Время действия 📅</th>
+                                <th className="px-5 py-4 font-black">Пользователь 👤</th>
+                                <th className="px-5 py-4 font-black">Что сделал? (Лог) ⚙️</th>
+                                <th className="px-5 py-4 font-black text-right">Баланс монет 💰</th>
+                                <th className="px-5 py-4 font-black text-center">Клан 🏰</th>
+                                <th className="px-5 py-4 font-black text-center">Друзей ⭐</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-white/[0.03]">
+                              {filteredAndSortedActions.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="px-5 py-12 text-center">
+                                    <div className="text-gray-500 text-xs font-bold uppercase tracking-wider">Логи активности пусты за этот период</div>
+                                    <p className="text-[10px] text-gray-600 mt-1">Попробуйте изменить даты в календаре или текст поиска.</p>
+                                  </td>
+                                </tr>
+                              ) : (
+                                filteredAndSortedActions.map((act, index) => {
+                                  const formattedTime = act.timestamp?.toMillis 
+                                    ? new Date(act.timestamp.toMillis()).toLocaleString() 
+                                    : (act.timestamp ? new Date(act.timestamp).toLocaleString() : "—");
+
+                                  const isSpecialAction = act.action && (
+                                    act.action.includes("клан") || 
+                                    act.action.includes("апгрейд") || 
+                                    act.action.includes("друг") ||
+                                    act.action.includes("рынк")
+                                  );
+
+                                  return (
+                                    <tr key={act.id || index} className="hover:bg-white/[0.02] transition-colors text-xs">
+                                      {/* Timestamp */}
+                                      <td className="px-5 py-3.5 text-gray-400 font-mono">
+                                        {formattedTime}
+                                      </td>
+
+                                      {/* User name & ID */}
+                                      <td className="px-5 py-3.5">
+                                        <div className="flex flex-col">
+                                          <span className="font-bold text-gray-100 uppercase">{act.playerName || "Игрок"}</span>
+                                          <span className="text-[9px] text-gray-600 font-mono tracking-wider truncate max-w-[120px]" title={act.userId}>{act.userId}</span>
+                                        </div>
+                                      </td>
+
+                                      {/* User action description */}
+                                      <td className="px-5 py-3.5">
+                                        <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${
+                                          isSpecialAction
+                                            ? "bg-rose-500/10 text-rose-300 border border-rose-500/10"
+                                            : "bg-[#1f2937] text-gray-300 border border-white/5"
+                                        }`}>
+                                          {act.action || "Сохранение"}
+                                        </span>
+                                      </td>
+
+                                      {/* Coins balance */}
+                                      <td className="px-5 py-3.5 text-right font-black text-amber-400">
+                                        {Math.floor(act.coins || 0).toLocaleString()} 💰
+                                      </td>
+
+                                      {/* Clan */}
+                                      <td className="px-5 py-3.5 text-center">
+                                        <span className={act.playerClan ? "text-indigo-400 font-bold bg-indigo-500/10 px-2 py-0.5 rounded" : "text-gray-600"}>
+                                          {act.playerClan || "—"}
+                                        </span>
+                                      </td>
+
+                                      {/* Friends count */}
+                                      <td className="px-5 py-3.5 text-center font-bold text-emerald-400">
+                                        {act.friendsCount || 0} ⭐
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
 
@@ -1769,6 +2149,156 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                   </div>
                 </div>
               )}
+
+              {activeTab === "withdrawals" && (() => {
+                const pendingWithdrawals = withdrawals.filter(w => w.status === "pending");
+                const completedWithdrawals = withdrawals.filter(w => w.status === "completed");
+                const totalPendingSum = pendingWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+                const totalCompletedSum = completedWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+
+                return (
+                  <div className="flex flex-col gap-6 animate-fade-in pb-10">
+                    {/* Header Summary */}
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col justify-between">
+                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Всего запросов</span>
+                        <span className="text-xl font-black text-white mt-1">{withdrawals.length} шт.</span>
+                      </div>
+                      <div className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col justify-between">
+                        <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Ожидают выплаты</span>
+                        <span className="text-xl font-black text-amber-400 mt-1">{pendingWithdrawals.length} шт.</span>
+                      </div>
+                      <div className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col justify-between">
+                        <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Сумма ожидания</span>
+                        <span className="text-xl font-black text-indigo-400 mt-1">{totalPendingSum.toFixed(2)} ₽</span>
+                      </div>
+                      <div className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col justify-between">
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Выплачено всего</span>
+                        <span className="text-xl font-black text-emerald-400 mt-1">{totalCompletedSum.toFixed(2)} ₽</span>
+                      </div>
+                    </div>
+
+                    {/* Table / List */}
+                    <div className="bg-[#111827] border border-white/5 rounded-2xl p-4 flex flex-col gap-4">
+                      <div className="flex justify-between items-center pb-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <Wallet className="w-5 h-5 text-indigo-400" />
+                          <h2 className="text-xs font-black tracking-widest uppercase text-white">Список заявок на вывод средств</h2>
+                        </div>
+                      </div>
+
+                      {withdrawals.length === 0 ? (
+                        <div className="text-center py-16 text-gray-500 font-mono text-xs">
+                          Заявки на выплаты в базе данных не найдены
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {withdrawals.map((w) => {
+                            const dateStr = w.createdAt?.seconds 
+                              ? new Date(w.createdAt.seconds * 1000).toLocaleString()
+                              : 'Неизвестно';
+                            
+                            const isProcessing = isProcessingWithdrawalId === w.id;
+
+                            return (
+                              <div key={w.id} className="bg-black/20 border border-white/5 hover:border-white/10 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all">
+                                <div className="flex flex-col gap-1.5 min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-xs font-black text-white">
+                                      {w.playerName || "Неизвестный игрок"}
+                                    </span>
+                                    <span className="text-[9px] text-gray-500 font-mono">
+                                      (ID: {w.userId})
+                                    </span>
+                                    <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                                      w.system === 'vkpay' 
+                                        ? 'bg-blue-500/10 border border-blue-500/20 text-blue-400' 
+                                        : w.system === 'qiwi' 
+                                        ? 'bg-[#ff8c00]/10 border border-[#ff8c00]/20 text-[#ff8c00]' 
+                                        : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
+                                    }`}>
+                                      {w.system === 'vkpay' ? 'VK Pay' : w.system === 'qiwi' ? 'QIWI' : 'Карта'}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex flex-col gap-0.5 font-mono text-xs font-semibold">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-gray-500">Сумма:</span>
+                                      <span className="text-[#2ecc71] font-extrabold">{w.amount?.toFixed(2)} ₽</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-gray-500">Реквизиты:</span>
+                                      <span className="text-white font-bold select-all">{w.details}</span>
+                                      <button
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(w.details || "");
+                                          addToast("📋 Реквизиты скопированы в буфер обмена!");
+                                        }}
+                                        className="text-[9px] text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded font-black uppercase tracking-wide cursor-pointer outline-none border-none"
+                                      >
+                                        Копировать
+                                      </button>
+                                    </div>
+                                    <div className="text-[10px] text-gray-600 mt-1">
+                                      Создано: {dateStr}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0 sm:self-center">
+                                  {w.status === "pending" ? (
+                                    <>
+                                      <button
+                                        disabled={isProcessing}
+                                        onClick={() => {
+                                          setConfirmModal({
+                                            isOpen: true,
+                                            title: "Одобрить выплату",
+                                            message: `Вы действительно хотите пометить заявку игрока ${w.playerName} на сумму ${w.amount?.toFixed(2)} ₽ как ВЫПЛАЧЕННУЮ? Убедитесь, что вы уже перевели ему деньги вручную по реквизитам: ${w.details}`,
+                                            onConfirm: () => handleApproveWithdrawal(w.id, w.playerName, w.amount)
+                                          });
+                                        }}
+                                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-black rounded-lg transition-all cursor-pointer border-none outline-none"
+                                      >
+                                        Выплачено ✓
+                                      </button>
+                                      <button
+                                        disabled={isProcessing}
+                                        onClick={() => {
+                                          setConfirmModal({
+                                            isOpen: true,
+                                            title: "Отклонить выплату",
+                                            message: `Вы действительно хотите ОТКЛОНИТЬ заявку игрока ${w.playerName} на сумму ${w.amount?.toFixed(2)} ₽? Средства будут возвращены на его игровой рублевый баланс автоматически.`,
+                                            onConfirm: () => handleRejectWithdrawal(w.id, w.userId, w.playerName, w.amount)
+                                          });
+                                        }}
+                                        className="px-3 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-xs font-black rounded-lg transition-all cursor-pointer border-none outline-none"
+                                      >
+                                        Отклонить ✗
+                                      </button>
+                                    </>
+                                  ) : w.status === "completed" ? (
+                                    <div className="flex items-center gap-1 text-[#2ecc71] font-mono font-bold text-xs bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl">
+                                      <CheckCircle className="w-4 h-4" /> Выплачено
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <div className="text-rose-400 font-mono font-bold text-xs bg-rose-500/10 border border-rose-500/20 px-3 py-1.5 rounded-xl">
+                                        Отклонено
+                                      </div>
+                                      <span className="text-[9px] text-gray-500 font-mono font-semibold">Средства возвращены</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>
