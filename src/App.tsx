@@ -6248,16 +6248,46 @@ export default function App() {
                         {/* Button 3: Share */}
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
+                            const textToCopy = refLink;
+                            let copied = false;
+                            try {
+                              if (navigator.clipboard && navigator.clipboard.writeText) {
+                                await navigator.clipboard.writeText(textToCopy);
+                                copied = true;
+                              }
+                            } catch (e) {
+                              console.warn("navigator.clipboard failed, trying fallback", e);
+                            }
+
+                            if (!copied) {
+                              try {
+                                const textArea = document.createElement("textarea");
+                                textArea.value = textToCopy;
+                                textArea.style.position = "fixed";
+                                textArea.style.opacity = "0";
+                                document.body.appendChild(textArea);
+                                textArea.focus();
+                                textArea.select();
+                                copied = document.execCommand('copy');
+                                document.body.removeChild(textArea);
+                              } catch (e) {
+                                console.error("Fallback copy failed", e);
+                              }
+                            }
+
+                            addToast("📋 Реферальная ссылка скопирована в буфер обмена!");
+
                             if (navigator.share) {
-                              navigator.share({
-                                title: 'Клик Клан',
-                                text: 'Присоединяйся к моей игре в Клик Клан и получи 50,000 монет на старт!',
-                                url: refLink
-                              }).catch(err => console.warn(err));
-                            } else {
-                              navigator.clipboard.writeText(refLink);
-                              addToast("📋 Реферальная ссылка скопирована в буфер обмена!");
+                              try {
+                                await navigator.share({
+                                  title: 'Клик Клан',
+                                  text: 'Присоединяйся к моей игре в Клик Клан и получи 50,000 монет на старт!',
+                                  url: textToCopy
+                                });
+                              } catch (err) {
+                                console.warn("navigator.share failed or was cancelled:", err);
+                              }
                             }
                           }}
                           className="flex flex-col items-center justify-center gap-1.5 p-2.5 bg-slate-950 border border-white/5 hover:border-[#e67e22]/20 rounded-xl cursor-pointer text-center outline-none transition-colors group"
