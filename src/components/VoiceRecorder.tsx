@@ -19,6 +19,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
 
   const startRecording = useCallback(() => {
     try {
+      console.log("Starting voice recording...");
       audioChunksRef.current = [];
       setRecordingTime(0);
       startTimeRef.current = Date.now();
@@ -28,19 +29,23 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
+        console.log("Data available:", event.data.size);
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
+        console.log("Recording stopped, audio chunks:", audioChunksRef.current.length);
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        console.log("Audio blob size:", audioBlob.size);
         const exactDurationSeconds = Math.max(1, Math.floor((Date.now() - startTimeRef.current) / 1000));
         
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
         reader.onloadend = () => {
           const base64data = reader.result as string;
+          console.log("Base64 data length:", base64data.length);
           if (shouldSendRef.current) {
             onSend(base64data, exactDurationSeconds);
           }
@@ -52,8 +57,13 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
         stream.getTracks().forEach((track) => track.stop());
       };
 
+      mediaRecorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event);
+      };
+
       mediaRecorder.start();
       setIsRecording(true);
+      console.log("MediaRecorder started");
 
       timerRef.current = window.setInterval(() => {
         setRecordingTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
