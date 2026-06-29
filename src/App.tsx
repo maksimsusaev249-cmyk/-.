@@ -4510,9 +4510,12 @@ export default function App() {
                     }
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     setActiveVoiceStream(stream);
-                  } catch (err) {
+                      } catch (err: any) {
                     console.error("Failed to access microphone", err);
-                    addToast((err as any)?.name === "NotFoundError" ? "🎤 Микрофон не найден на этом устройстве" : "🎤 Нет доступа к микрофону");
+                    let message = "🎤 Не удалось получить доступ к микрофону.";
+                    if (err.name === "NotFoundError") message = "🎤 Микрофон не найден. Проверьте, подключен ли микрофон к компьютеру.";
+                    else if (err.name === "NotAllowedError") message = "🎤 Нет разрешения на использование микрофона. Разрешите его в настройках браузера.";
+                    addToast(message);
                   }
                 }}
                 className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-gray-400 hover:text-white transition-colors outline-none cursor-pointer shrink-0"
@@ -6334,9 +6337,12 @@ export default function App() {
                               }
                               const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                               setActiveFriendVoiceStream(stream);
-                            } catch (err) {
+                            } catch (err: any) {
                               console.error("Failed to access microphone", err);
-                              addToast((err as any)?.name === "NotFoundError" ? "🎤 Микрофон не найден на этом устройстве" : "🎤 Нет доступа к микрофону");
+                              let message = "🎤 Не удалось получить доступ к микрофону.";
+                              if (err.name === "NotFoundError") message = "🎤 Микрофон не найден. Проверьте, подключен ли микрофон к компьютеру.";
+                              else if (err.name === "NotAllowedError") message = "🎤 Нет разрешения на использование микрофона. Разрешите его в настройках браузера.";
+                              addToast(message);
                             }
                           }}
                           className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-gray-400 hover:text-white transition-colors outline-none cursor-pointer shrink-0"
