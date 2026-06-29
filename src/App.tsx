@@ -344,12 +344,32 @@ const playNotificationSentRetro = () => {
   } catch (e) {}
 };
 
+export const safeGetItem = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+};
+
+export const safeSetItem = (key: string, value: string): void => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {}
+};
+
+export const safeRemoveItem = (key: string): void => {
+  try {
+    localStorage.removeItem(key);
+  } catch (e) {}
+};
+
 const playNotificationSound = (customSoundKey?: string, forcePlay = false) => {
   try {
-    const soundOn = localStorage.getItem("gameSoundEnabledV12") !== "false";
+    const soundOn = safeGetItem("gameSoundEnabledV12") !== "false";
     if (!soundOn && !forcePlay) return;
 
-    const selected = customSoundKey || localStorage.getItem("gameReceivedSoundV1") || "iphone-sound-message";
+    const selected = customSoundKey || safeGetItem("gameReceivedSoundV1") || "iphone-sound-message";
 
     if (selected === "iphone-sound-message") {
       playNotificationReceivedChime();
@@ -367,10 +387,10 @@ const playNotificationSound = (customSoundKey?: string, forcePlay = false) => {
 
 const playSentSound = (customSoundKey?: string, forcePlay = false) => {
   try {
-    const soundOn = localStorage.getItem("gameSoundEnabledV12") !== "false";
+    const soundOn = safeGetItem("gameSoundEnabledV12") !== "false";
     if (!soundOn && !forcePlay) return;
 
-    const selected = customSoundKey || localStorage.getItem("gameSentSoundV1") || "iphone-sent-message";
+    const selected = customSoundKey || safeGetItem("gameSentSoundV1") || "iphone-sent-message";
 
     if (selected === "iphone-sent-message") {
       playNotificationSentPop();
@@ -389,14 +409,14 @@ const playSentSound = (customSoundKey?: string, forcePlay = false) => {
 export default function App() {
   // --- VERSION STATE ---
   const [appVersion, setAppVersion] = useState<"pc" | "mobile" | null>(() => {
-    const saved = localStorage.getItem("appVersion");
+    const saved = safeGetItem("appVersion");
     return (saved as "pc" | "mobile") || null;
   });
 
   // --- CORE GAME STATES ---
   const [coins, setCoins] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.coins === "number" ? parsed.coins : 0;
@@ -409,7 +429,7 @@ export default function App() {
 
   const [rubles, setRubles] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.rubles === "number" ? parsed.rubles : 10.0; // Give 10 rubles to start
@@ -439,7 +459,7 @@ export default function App() {
 
   const [clickPowerLevel, setClickPowerLevel] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.clickPowerLevel === "number" ? parsed.clickPowerLevel : 1;
@@ -452,7 +472,7 @@ export default function App() {
 
   const [autoClickerLevel, setAutoClickerLevel] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.autoClickerLevel === "number" ? parsed.autoClickerLevel : 0;
@@ -465,7 +485,7 @@ export default function App() {
 
   const [energyLevel, setEnergyLevel] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.energyLevel === "number" ? parsed.energyLevel : 1;
@@ -478,7 +498,7 @@ export default function App() {
 
   const [energy, setEnergy] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.energy === "number" ? parsed.energy : 100;
@@ -491,7 +511,7 @@ export default function App() {
 
   const [maxEnergy, setMaxEnergy] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.maxEnergy === "number" ? parsed.maxEnergy : 100;
@@ -504,7 +524,7 @@ export default function App() {
 
   const [regenRate, setRegenRate] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.regenRate === "number" ? parsed.regenRate : 1;
@@ -517,7 +537,7 @@ export default function App() {
 
   const [totalClicks, setTotalClicks] = useState<number>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return typeof parsed.totalClicks === "number" ? parsed.totalClicks : 0;
@@ -530,7 +550,7 @@ export default function App() {
 
   const [playerName, setPlayerName] = useState<string>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return parsed.playerName || "Игрок";
@@ -543,7 +563,7 @@ export default function App() {
 
   const [playerClan, setPlayerClan] = useState<string | null>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         return parsed.playerClan || null;
@@ -555,10 +575,10 @@ export default function App() {
   });
 
   const [playerId] = useState<string>(() => {
-    const saved = localStorage.getItem("myPlayerIdV9");
+    const saved = safeGetItem("myPlayerIdV9");
     if (saved) return saved;
     const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    localStorage.setItem("myPlayerIdV9", newId);
+    safeSetItem("myPlayerIdV9", newId);
     return newId;
   });
 
@@ -567,7 +587,7 @@ export default function App() {
 
   const [currentQuest, setCurrentQuest] = useState<Quest>(() => {
     try {
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.currentQuest) return parsed.currentQuest;
@@ -584,12 +604,12 @@ export default function App() {
   const [clanChatHistory, setClanChatHistory] = useState<ChatMessage[]>([]);
   const [chatChannel, setChatChannel] = useState<"global" | "clan">("global");
   const [friendsList, setFriendsList] = useState<string[]>(() => {
-    const saved = localStorage.getItem("gameFriendsV9");
+    const saved = safeGetItem("gameFriendsV9");
     return saved ? JSON.parse(saved) : [];
   });
 
   const [mutedPlayers, setMutedPlayers] = useState<string[]>(() => {
-    const saved = localStorage.getItem("gameMutedPlayersV9");
+    const saved = safeGetItem("gameMutedPlayersV9");
     return saved ? JSON.parse(saved) : [];
   });
 
@@ -597,12 +617,12 @@ export default function App() {
 
   useEffect(() => {
     mutedPlayersRef.current = mutedPlayers;
-    localStorage.setItem("gameMutedPlayersV9", JSON.stringify(mutedPlayers));
+    safeSetItem("gameMutedPlayersV9", JSON.stringify(mutedPlayers));
   }, [mutedPlayers]);
 
   // --- FRIEND CHAT (DIRECT MESSAGE) STATES ---
   const [directMessages, setDirectMessages] = useState<{ [friendId: string]: any[] }>(() => {
-    const saved = localStorage.getItem("gameDirectMsgsV9");
+    const saved = safeGetItem("gameDirectMsgsV9");
     return saved ? JSON.parse(saved) : {};
   });
   const [activeFriendChatId, setActiveFriendChatId] = useState<string | null>(null);
@@ -615,7 +635,7 @@ export default function App() {
   const [friendChatMessageText, setFriendChatMessageText] = useState("");
 
   useEffect(() => {
-    localStorage.setItem("gameDirectMsgsV9", JSON.stringify(directMessages));
+    safeSetItem("gameDirectMsgsV9", JSON.stringify(directMessages));
   }, [directMessages]);
 
   const ITEM_MAP = {
@@ -872,7 +892,7 @@ export default function App() {
   // Level Up Rewards States
   const [levelItems, setLevelItems] = useState<any[]>(() => {
     try {
-      const saved = localStorage.getItem("gameLevelItemsV12");
+      const saved = safeGetItem("gameLevelItemsV12");
       const parsed = saved ? JSON.parse(saved) : [];
       return Array.isArray(parsed) ? parsed : [];
     } catch {
@@ -880,7 +900,7 @@ export default function App() {
     }
   });
   const [lastClaimedLevel, setLastClaimedLevel] = useState<number>(() => {
-    const saved = localStorage.getItem("gameLastClaimedLevelV12");
+    const saved = safeGetItem("gameLastClaimedLevelV12");
     return saved ? Number(saved) : 1;
   });
 
@@ -898,7 +918,7 @@ export default function App() {
 
   // Custom User Avatar States
   const [playerPhotoURL, setPlayerPhotoURL] = useState<string>(() => {
-    const saved = localStorage.getItem("gameDataV9");
+    const saved = safeGetItem("gameDataV9");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -989,7 +1009,7 @@ export default function App() {
   const [activeFriendVoiceStream, setActiveFriendVoiceStream] = useState<MediaStream | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem("gameSoundEnabledV12");
+      const saved = safeGetItem("gameSoundEnabledV12");
       return saved ? JSON.parse(saved) : true;
     } catch {
       return true;
@@ -997,30 +1017,30 @@ export default function App() {
   });
 
   const [sentSoundKey, setSentSoundKey] = useState<string>(() => {
-    return localStorage.getItem("gameSentSoundV1") || "iphone-sent-message";
+    return safeGetItem("gameSentSoundV1") || "iphone-sent-message";
   });
 
   const [receivedSoundKey, setReceivedSoundKey] = useState<string>(() => {
-    return localStorage.getItem("gameReceivedSoundV1") || "iphone-sound-message";
+    return safeGetItem("gameReceivedSoundV1") || "iphone-sound-message";
   });
 
   // Keep localStorage synced whenever soundEnabled changes
   useEffect(() => {
-    localStorage.setItem("gameSoundEnabledV12", JSON.stringify(soundEnabled));
+    safeSetItem("gameSoundEnabledV12", JSON.stringify(soundEnabled));
   }, [soundEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("gameSentSoundV1", sentSoundKey);
+    safeSetItem("gameSentSoundV1", sentSoundKey);
   }, [sentSoundKey]);
 
   useEffect(() => {
-    localStorage.setItem("gameReceivedSoundV1", receivedSoundKey);
+    safeSetItem("gameReceivedSoundV1", receivedSoundKey);
   }, [receivedSoundKey]);
 
   const [toastHistory, setToastHistory] = useState<string[]>([]);
   const [telegramNotificationsEnabled, setTelegramNotificationsEnabled] = useState(true);
   const [isLiquidGlass, setIsLiquidGlass] = useState<boolean>(() => {
-    const saved = localStorage.getItem("gameLiquidGlass");
+    const saved = safeGetItem("gameLiquidGlass");
     return saved ? JSON.parse(saved) : false;
   });
 
@@ -1057,7 +1077,7 @@ export default function App() {
   const lvlInfo = getPlayerLevelInfo(totalClicks);
 
   useEffect(() => {
-    localStorage.setItem("gameLiquidGlass", JSON.stringify(isLiquidGlass));
+    safeSetItem("gameLiquidGlass", JSON.stringify(isLiquidGlass));
   }, [isLiquidGlass]);
 
   // --- VISUAL & NETWORKING ---
@@ -1113,7 +1133,7 @@ export default function App() {
 
   // --- SAVE CORE PROGRESS ON CHANGES ---
   useEffect(() => {
-    localStorage.setItem("gameDataV9", JSON.stringify({
+    safeSetItem("gameDataV9", JSON.stringify({
       coins,
       clickPowerLevel,
       autoClickerLevel,
@@ -1130,7 +1150,7 @@ export default function App() {
       rubles,
       lastActiveTimestamp: Date.now() + timeOffsetRef.current
     }));
-    localStorage.setItem("gameFriendsV9", JSON.stringify(friendsList));
+    safeSetItem("gameFriendsV9", JSON.stringify(friendsList));
 
     // Send status update to Server
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -1691,11 +1711,11 @@ export default function App() {
 
   // --- LEVEL UP REWARDS TRACKER & STORAGE PERSISTENCE ---
   useEffect(() => {
-    localStorage.setItem("gameLevelItemsV12", JSON.stringify(levelItems));
+    safeSetItem("gameLevelItemsV12", JSON.stringify(levelItems));
   }, [levelItems]);
 
   useEffect(() => {
-    localStorage.setItem("gameLastClaimedLevelV12", String(lastClaimedLevel));
+    safeSetItem("gameLastClaimedLevelV12", String(lastClaimedLevel));
   }, [lastClaimedLevel]);
 
   useEffect(() => {
@@ -1751,7 +1771,7 @@ export default function App() {
   // --- 24/7 OFFLINE INCOME CHECKER ON LOAD ---
   useEffect(() => {
     if (!isTimeSynced) return; // Wait until clock synchronization is complete to guarantee precise hours
-    const saved = localStorage.getItem("gameDataV9");
+    const saved = safeGetItem("gameDataV9");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -1826,7 +1846,7 @@ export default function App() {
 
   const chooseVersion = (type: "pc" | "mobile") => {
     setAppVersion(type);
-    localStorage.setItem("appVersion", type);
+    safeSetItem("appVersion", type);
   };
 
   // --- QUEST LOGIC ---
@@ -1974,11 +1994,11 @@ export default function App() {
       }
       if (ref) {
         console.log("Captured referral ID from URL:", ref);
-        localStorage.setItem("game_referrer_id", ref);
+        safeSetItem("game_referrer_id", ref);
       }
       if (clanParam) {
         console.log("Captured clan name from URL:", clanParam);
-        localStorage.setItem("game_join_clan_name", clanParam);
+        safeSetItem("game_join_clan_name", clanParam);
       }
     } catch (e) {
       console.error("Failed to parse URL parameters:", e);
@@ -1988,7 +2008,7 @@ export default function App() {
   // Check for pending clan join on startup
   useEffect(() => {
     if (!currentUser || clansPrivacy.length === 0) return;
-    const pending = localStorage.getItem("game_join_clan_name");
+    const pending = safeGetItem("game_join_clan_name");
     if (pending) {
       const exists = clansPrivacy.some(c => c.name.toLowerCase() === pending.toLowerCase());
       if (exists) {
@@ -1997,7 +2017,7 @@ export default function App() {
       } else {
         console.warn(`Pending clan "${pending}" from URL not found in clansPrivacy`);
       }
-      localStorage.removeItem("game_join_clan_name");
+      safeRemoveItem("game_join_clan_name");
     }
   }, [currentUser, clansPrivacy]);
 
@@ -2222,7 +2242,7 @@ export default function App() {
               setIsWhitelistApproved(true);
             }
 
-            const savedReferrerId = localStorage.getItem("game_referrer_id");
+            const savedReferrerId = safeGetItem("game_referrer_id");
             let finalReferredBy = null;
             if (savedReferrerId && savedReferrerId !== user.uid) {
               try {
@@ -2263,7 +2283,7 @@ export default function App() {
               } catch (err) {
                 console.warn("Failed to process automatic referral reward:", err);
               } finally {
-                localStorage.removeItem("game_referrer_id");
+                safeRemoveItem("game_referrer_id");
               }
             }
 
@@ -2756,7 +2776,7 @@ export default function App() {
     coinsValue?: number
   ) => {
     try {
-      const savedAccountsRaw = localStorage.getItem("gameSavedAccountsV1");
+      const savedAccountsRaw = safeGetItem("gameSavedAccountsV1");
       let accounts = savedAccountsRaw ? JSON.parse(savedAccountsRaw) : [];
       if (!Array.isArray(accounts)) accounts = [];
 
@@ -2785,7 +2805,7 @@ export default function App() {
         accounts.push(accountData);
       }
 
-      localStorage.setItem("gameSavedAccountsV1", JSON.stringify(accounts));
+      safeSetItem("gameSavedAccountsV1", JSON.stringify(accounts));
       setSavedAccounts(accounts);
     } catch (e) {
       console.error("Failed to save account to list:", e);
@@ -2795,12 +2815,12 @@ export default function App() {
   // Delete/forget a saved account on this device
   const deleteSavedAccountFromList = (uid: string) => {
     try {
-      const savedAccountsRaw = localStorage.getItem("gameSavedAccountsV1");
+      const savedAccountsRaw = safeGetItem("gameSavedAccountsV1");
       if (!savedAccountsRaw) return;
       const parsed = JSON.parse(savedAccountsRaw);
       if (Array.isArray(parsed)) {
         const filtered = parsed.filter((acc: any) => acc.uid !== uid);
-        localStorage.setItem("gameSavedAccountsV1", JSON.stringify(filtered));
+        safeSetItem("gameSavedAccountsV1", JSON.stringify(filtered));
         setSavedAccounts(filtered);
         addToast("🗑️ Аккаунт забыт на этом устройстве.");
       }
@@ -2843,7 +2863,7 @@ export default function App() {
   // Load saved accounts from localStorage on component mount
   useEffect(() => {
     try {
-      const savedAccountsRaw = localStorage.getItem("gameSavedAccountsV1");
+      const savedAccountsRaw = safeGetItem("gameSavedAccountsV1");
       if (savedAccountsRaw) {
         const parsed = JSON.parse(savedAccountsRaw);
         if (Array.isArray(parsed)) {
@@ -3169,14 +3189,14 @@ export default function App() {
     
     // Auto-detect version for VK
     const platform = searchParams.get("vk_platform");
-    const storedAppVersion = localStorage.getItem("appVersion");
+    const storedAppVersion = safeGetItem("appVersion");
     if (!storedAppVersion && platform) {
       if (platform === "desktop_web" || platform === "web") {
         setAppVersion("pc");
-        localStorage.setItem("appVersion", "pc");
+        safeSetItem("appVersion", "pc");
       } else {
         setAppVersion("mobile");
-        localStorage.setItem("appVersion", "mobile");
+        safeSetItem("appVersion", "mobile");
       }
     }
 
@@ -3925,12 +3945,12 @@ export default function App() {
             
             // Forget this account from this device under savedAccounts
             try {
-              const savedAccountsRaw = localStorage.getItem("gameSavedAccountsV1");
+              const savedAccountsRaw = safeGetItem("gameSavedAccountsV1");
               if (savedAccountsRaw) {
                 const parsed = JSON.parse(savedAccountsRaw);
                 if (Array.isArray(parsed)) {
                   const filtered = parsed.filter((acc: any) => acc.uid !== currentUser.uid);
-                  localStorage.setItem("gameSavedAccountsV1", JSON.stringify(filtered));
+                  safeSetItem("gameSavedAccountsV1", JSON.stringify(filtered));
                   setSavedAccounts(filtered);
                 }
               }
@@ -3943,13 +3963,13 @@ export default function App() {
           }
           
           // Clear ALL local storage keys
-          localStorage.removeItem("gameDataV9");
-          localStorage.removeItem("myPlayerIdV9");
-          localStorage.removeItem("gameFriendsV9");
-          localStorage.removeItem("gameDirectMsgsV9");
-          localStorage.removeItem("gameLevelItemsV12");
-          localStorage.removeItem("gameLastClaimedLevelV12");
-          localStorage.removeItem("gameLiquidGlass");
+          safeRemoveItem("gameDataV9");
+          safeRemoveItem("myPlayerIdV9");
+          safeRemoveItem("gameFriendsV9");
+          safeRemoveItem("gameDirectMsgsV9");
+          safeRemoveItem("gameLevelItemsV12");
+          safeRemoveItem("gameLastClaimedLevelV12");
+          safeRemoveItem("gameLiquidGlass");
           
           addToast("🗑️ Прогресс игры успешно сброшен!");
           setIsSettingsOpen(false);
@@ -4484,6 +4504,10 @@ export default function App() {
                 type="button"
                 onClick={async () => {
                   try {
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                      addToast("🎤 В этом браузере не поддерживается запись голоса");
+                      return;
+                    }
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     setActiveVoiceStream(stream);
                   } catch (err) {
@@ -4533,12 +4557,12 @@ export default function App() {
       setExchangeCoinsAmount("");
       
       // Save locally
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         parsed.coins = newCoins;
         parsed.rubles = newRubles;
-        localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+        safeSetItem("gameDataV9", JSON.stringify(parsed));
       }
       
       // Save to Firestore
@@ -4588,12 +4612,12 @@ export default function App() {
       setExchangeRublesAmount("");
       
       // Save locally
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         parsed.coins = newCoins;
         parsed.rubles = newRubles;
-        localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+        safeSetItem("gameDataV9", JSON.stringify(parsed));
       }
       
       // Save to Firestore
@@ -4656,11 +4680,11 @@ export default function App() {
       setWithdrawDetails("");
       
       // Save locally
-      const saved = localStorage.getItem("gameDataV9");
+      const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
         parsed.rubles = newRubles;
-        localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+        safeSetItem("gameDataV9", JSON.stringify(parsed));
       }
       
       // Save to Firestore
@@ -6304,6 +6328,10 @@ export default function App() {
                           type="button"
                           onClick={async () => {
                             try {
+                              if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                                addToast("🎤 В этом браузере не поддерживается запись голоса");
+                                return;
+                              }
                               const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                               setActiveFriendVoiceStream(stream);
                             } catch (err) {
@@ -7788,7 +7816,7 @@ export default function App() {
                     return;
                   }
                   sessionStorage.setItem("skipVKAutoLogin", "true");
-                  localStorage.setItem("myPlayerIdV9", swapPlayerId);
+                  safeSetItem("myPlayerIdV9", swapPlayerId);
                   if (auth?.currentUser) {
                     try {
                       await signOut(auth);
@@ -8098,6 +8126,13 @@ export default function App() {
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                   </svg>
                 </button>
+                <button 
+                  onClick={() => { setIsAuthModalOpen(false); setIsScanModalOpen(true); }} 
+                  className="w-14 h-14 bg-slate-800 hover:bg-slate-700 active:scale-90 text-emerald-400 rounded-2xl flex items-center justify-center transition-all shadow-md cursor-pointer border-none outline-none"
+                  title="Войти по QR-коду"
+                >
+                  <QrCode className="w-7 h-7" />
+                </button>
               </div>
             </div>
 
@@ -8107,7 +8142,7 @@ export default function App() {
                 <button 
                   onClick={() => {
                     setAppVersion("pc");
-                    localStorage.setItem("appVersion", "pc");
+                    safeSetItem("appVersion", "pc");
                   }}
                   className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black uppercase transition-all border cursor-pointer ${
                     appVersion === "pc" 
@@ -8120,7 +8155,7 @@ export default function App() {
                 <button 
                   onClick={() => {
                     setAppVersion("mobile");
-                    localStorage.setItem("appVersion", "mobile");
+                    safeSetItem("appVersion", "mobile");
                   }}
                   className={`flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-black uppercase transition-all border cursor-pointer ${
                     appVersion === "mobile" 
@@ -9094,13 +9129,13 @@ export default function App() {
                 setOfflineEarningsData(null);
                 
                 // Save immediately so state remains clean in localStorage
-                const saved = localStorage.getItem("gameDataV9");
+                const saved = safeGetItem("gameDataV9");
                 if (saved) {
                   try {
                     const parsed = JSON.parse(saved);
                     parsed.coins = totalClaimed;
                     parsed.lastActiveTimestamp = Date.now() + timeOffsetRef.current;
-                    localStorage.setItem("gameDataV9", JSON.stringify(parsed));
+                    safeSetItem("gameDataV9", JSON.stringify(parsed));
                   } catch (e) {
                     console.error("Failed to update coins in localStorage on offline claim", e);
                   }
