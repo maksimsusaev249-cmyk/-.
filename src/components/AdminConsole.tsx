@@ -73,6 +73,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
   const [cfgModerators, setCfgModerators] = useState("");
   const [whitelistEnabled, setWhitelistEnabled] = useState(true);
   const [whitelistCodes, setWhitelistCodes] = useState("");
+  const [voiceStartHour, setVoiceStartHour] = useState(22);
+  const [voiceEndHour, setVoiceEndHour] = useState(7);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Support section UI states
@@ -278,6 +280,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
         setCfgModerators(data.moderators?.join(", ") || "");
         setWhitelistEnabled(typeof data.whitelistEnabled === "boolean" ? data.whitelistEnabled : true);
         setWhitelistCodes(data.whitelistCodes?.join(", ") || "");
+        if (typeof data.voiceStartHour === "number") setVoiceStartHour(data.voiceStartHour);
+        if (typeof data.voiceEndHour === "number") setVoiceEndHour(data.voiceEndHour);
       }
     } catch (e) {
       console.error("Failed to fetch admin config keys", e);
@@ -301,7 +305,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
           admins: parsedAdmins,
           moderators: parsedModerators,
           whitelistEnabled,
-          whitelistCodes: parsedWhitelist
+          whitelistCodes: parsedWhitelist,
+          voiceStartHour,
+          voiceEndHour
         }),
       });
       if (res.ok) {
@@ -314,6 +320,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
         setCfgModerators(data.moderators?.join(", ") || "");
         setWhitelistEnabled(typeof data.whitelistEnabled === "boolean" ? data.whitelistEnabled : true);
         setWhitelistCodes(data.whitelistCodes?.join(", ") || "");
+        if (typeof data.voiceStartHour === "number") setVoiceStartHour(data.voiceStartHour);
+        if (typeof data.voiceEndHour === "number") setVoiceEndHour(data.voiceEndHour);
       } else {
         const err = await res.json().catch(() => ({}));
         addToast(`❌ Сбой при сохранении: ${err.error || "ошибка сети"}`);
@@ -2022,6 +2030,41 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ onClose, addToast })
                           </span>
                         </>
                       )}
+                    </div>
+
+                    <div className="h-px bg-white/5 my-3" />
+
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                        🎤 Часы работы голосовых сообщений (МСК)
+                      </label>
+                      <div className="flex items-center gap-4 mt-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400">С:</span>
+                          <input 
+                            type="number"
+                            min="0"
+                            max="23"
+                            value={voiceStartHour}
+                            onChange={(e) => setVoiceStartHour(parseInt(e.target.value) || 0)}
+                            className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 w-20 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400">До:</span>
+                          <input 
+                            type="number"
+                            min="0"
+                            max="23"
+                            value={voiceEndHour}
+                            onChange={(e) => setVoiceEndHour(parseInt(e.target.value) || 0)}
+                            className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 w-20 text-xs text-white placeholder-gray-500 font-mono outline-none focus:border-indigo-500/50 transition-colors"
+                          />
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Настройте время (по МСК), когда в ОБЩЕМ чате разрешена отправка голосовых. В кланах голосовые работают круглосуточно.
+                      </span>
                     </div>
 
                     <div className="h-px bg-white/5 my-3" />

@@ -49,12 +49,16 @@ import {
   Share2,
   Camera,
   UserPlus,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from "recharts";
 const swordImg = "/images/item_sword.jpg";
 const potionImg = "/images/item_potion.jpg";
 const shieldImg = "/images/item_shield.jpg";
 import { motion, AnimatePresence } from "motion/react";
+import { VoiceRecorder } from "./components/VoiceRecorder";
+import { VoicePlayer } from "./components/VoicePlayer";
 import { auth, db, googleProvider, signInWithPopup, signOut } from "./firebase";
 import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, updateDoc, runTransaction, limit, increment } from "firebase/firestore";
 import { onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
@@ -153,6 +157,12 @@ interface Player {
   photoURL?: string;
   isOnline?: boolean;
   telegramId?: string | null;
+  isAdmin?: boolean;
+  isModerator?: boolean;
+  voiceSettings?: {
+    globalAllowed?: boolean;
+    disabledVoiceSenders?: string[];
+  };
 }
 
 interface ChatMessage {
@@ -166,6 +176,8 @@ interface ChatMessage {
   isClanOnly?: boolean;
   senderId?: string;
   senderName?: string;
+  voiceData?: string | null;
+  voiceDuration?: number | null;
 }
 
 interface ClickSparkle {
@@ -973,6 +985,8 @@ export default function App() {
   const [enteredJoinPassword, setEnteredJoinPassword] = useState("");
   
   const [chatMessageText, setChatMessageText] = useState("");
+  const [activeVoiceStream, setActiveVoiceStream] = useState<MediaStream | null>(null);
+  const [activeFriendVoiceStream, setActiveFriendVoiceStream] = useState<MediaStream | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem("gameSoundEnabledV12");
@@ -1399,6 +1413,20 @@ export default function App() {
                     return updated.slice(-50); // Keep max 50 values
                   });
                 }
+                break;
+              }
+              case "delete_chat_msg_broadcast": {
+                const { messageId } = message.data;
+                setGlobalChatHistory((prev) => prev.filter(m => m.id !== messageId));
+                setClanChatHistory((prev) => prev.filter(m => m.id !== messageId));
+                break;
+              }
+              case "chat_msg_error": {
+                addToast(`⚠️ ${message.data.error || "Ошибка чата"}`);
+                break;
+              }
+              case "direct_msg_error": {
+                addToast(`⚠️ ${message.data.error || "Ошибка ЛС"}`);
                 break;
               }
               case "direct_msg_broadcast": {
@@ -1901,6 +1929,33 @@ export default function App() {
        }));
       setChatMessageText("");
       playSentSound();
+    } else {
+      addToast("⚠️ Ошибка подключения. Сообщение не отправлено.");
+    }
+  };
+
+  const sendVoiceChatMessage = (voiceData: string, voiceDuration: number) => {
+    const isClanOnly = chatChannel === "clan";
+    if (isClanOnly && !playerClan) {
+      addToast("⚠️ Сначала вступите в клан или создайте его!");
+      return;
+    }
+
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+       socketRef.current.send(JSON.stringify({
+         type: "chat_msg",
+         data: {
+           playerId: effectivePlayerId,
+           isClanOnly,
+           voiceData,
+           voiceDuration
+         }
+       }));
+       if (activeVoiceStream) {
+         activeVoiceStream.getTracks().forEach(t => t.stop());
+         setActiveVoiceStream(null);
+       }
+       playSentSound();
     } else {
       addToast("⚠️ Ошибка подключения. Сообщение не отправлено.");
     }
@@ -4068,6 +4123,29 @@ export default function App() {
     }
   };
 
+  const sendFriendVoiceMessage = (voiceData: string, voiceDuration: number) => {
+    if (!activeFriendChatId) return;
+
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+       socketRef.current.send(JSON.stringify({
+         type: "direct_msg",
+         data: {
+           playerId: effectivePlayerId,
+           recipientId: activeFriendChatId,
+           voiceData,
+           voiceDuration
+         }
+       }));
+       if (activeFriendVoiceStream) {
+         activeFriendVoiceStream.getTracks().forEach(t => t.stop());
+         setActiveFriendVoiceStream(null);
+       }
+       playSentSound();
+    } else {
+      addToast("⚠️ Ошибка подключения. Сообщение не отправлено.");
+    }
+  };
+
   // --- RENDER SELECTION SCREEN ---
   if (!appVersion) {
     return (
@@ -4186,6 +4264,9 @@ export default function App() {
   };
 
   const renderChatContent = () => {
+    const me = onlinePlayers.find(p => p.id === effectivePlayerId);
+    const isPrivileged = me?.isAdmin || me?.isModerator;
+    
     return (
       <div className="flex flex-col h-full justify-between min-h-0 text-white">
         {/* Channel Selector */}
@@ -4245,8 +4326,28 @@ export default function App() {
                         {m.playerName}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
+                      {isPrivileged && (
+                        <button 
+                          onClick={() => {
+                            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                              socketRef.current.send(JSON.stringify({
+                                type: "delete_chat_msg",
+                                data: { playerId: effectivePlayerId, messageId: m.id }
+                              }));
+                            }
+                          }}
+                          className="text-red-500/50 hover:text-red-400 bg-transparent border-none cursor-pointer p-0 w-3 h-3 flex items-center justify-center shrink-0 ml-1"
+                          title="Удалить сообщение"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
                     </div>
-                    <p className="text-white font-medium select-text whitespace-pre-wrap break-all pr-1">{parseChatMessageText(m.text)}</p>
+                    {m.voiceData ? (
+                      <VoicePlayer voiceData={m.voiceData} duration={m.voiceDuration} color={isSelf ? "#ffbe7a" : m.color || "#e67e22"} />
+                    ) : (
+                      <p className="text-white font-medium select-text whitespace-pre-wrap break-all pr-1">{parseChatMessageText(m.text)}</p>
+                    )}
                   </div>
                 );
               })
@@ -4296,10 +4397,30 @@ export default function App() {
                         {m.playerName}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
+                      {isPrivileged && (
+                        <button 
+                          onClick={() => {
+                            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                              socketRef.current.send(JSON.stringify({
+                                type: "delete_chat_msg",
+                                data: { playerId: effectivePlayerId, messageId: m.id }
+                              }));
+                            }
+                          }}
+                          className="text-red-500/50 hover:text-red-400 bg-transparent border-none cursor-pointer p-0 w-3 h-3 flex items-center justify-center shrink-0 ml-1"
+                          title="Удалить сообщение"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
                     </div>
-                    <p className={`text-white font-medium select-text whitespace-pre-wrap break-all pr-1 ${isSystem ? "text-[11px] leading-relaxed mx-auto text-center font-semibold text-gray-100 bg-black/10 py-1 px-2.5 rounded-lg border border-white/5" : ""}`}>
-                      {parseChatMessageText(m.text)}
-                    </p>
+                    {m.voiceData ? (
+                      <VoicePlayer voiceData={m.voiceData} duration={m.voiceDuration} color={isSelf ? "#a5b4fc" : m.color || "#38bdf8"} />
+                    ) : (
+                      <p className={`text-white font-medium select-text whitespace-pre-wrap break-all pr-1 ${isSystem ? "text-[11px] leading-relaxed mx-auto text-center font-semibold text-gray-100 bg-black/10 py-1 px-2.5 rounded-lg border border-white/5" : ""}`}>
+                        {parseChatMessageText(m.text)}
+                      </p>
+                    )}
                     
                     {m.playerId === "SYSTEM_BOT" && (
                       <div className="flex gap-2 mt-2 w-full">
@@ -4339,24 +4460,53 @@ export default function App() {
         </div>
 
         {/* Message control inputs */}
-        <form onSubmit={sendChatMessage} className="mt-3 flex items-center gap-1.5 pt-2.5 border-t border-white/5">
-          <input 
-            type="text" 
-            value={chatMessageText}
-            onChange={(e) => setChatMessageText(e.target.value)}
-            maxLength={150}
-            placeholder={chatChannel === "clan" ? "Напишите союзникам..." : "Напишите в общий чат..."}
-            className="flex-1 h-9 px-3 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
-          />
-          <button 
-            type="submit" 
-            className={`w-9 h-9 flex items-center justify-center rounded-xl shadow-md cursor-pointer transition-colors border-none outline-none shrink-0 ${
-              chatChannel === "clan" ? "bg-[#e67e22] hover:bg-[#d35400]" : "bg-blue-600 hover:bg-blue-500"
-            }`}
-          >
-            <Send className="w-3.5 h-3.5 text-white" />
-          </button>
-        </form>
+        <div className="mt-3 flex flex-col gap-1.5 pt-2.5 border-t border-white/5">
+          {activeVoiceStream ? (
+            <VoiceRecorder 
+              stream={activeVoiceStream}
+              onSend={sendVoiceChatMessage} 
+              onCancel={() => {
+                activeVoiceStream.getTracks().forEach(t => t.stop());
+                setActiveVoiceStream(null);
+              }} 
+            />
+          ) : (
+            <form onSubmit={sendChatMessage} className="flex items-center gap-1.5">
+              <input 
+                type="text" 
+                value={chatMessageText}
+                onChange={(e) => setChatMessageText(e.target.value)}
+                maxLength={150}
+                placeholder={chatChannel === "clan" ? "Напишите союзникам..." : "Напишите в общий чат..."}
+                className="flex-1 h-9 px-3 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
+              />
+              <button 
+                type="button"
+                onClick={async () => {
+                  try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    setActiveVoiceStream(stream);
+                  } catch (err) {
+                    console.error("Failed to access microphone", err);
+                    addToast((err as any)?.name === "NotFoundError" ? "🎤 Микрофон не найден на этом устройстве" : "🎤 Нет доступа к микрофону");
+                  }
+                }}
+                className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-gray-400 hover:text-white transition-colors outline-none cursor-pointer shrink-0"
+                title="Записать голосовое сообщение"
+              >
+                <Mic size={14} />
+              </button>
+              <button 
+                type="submit" 
+                className={`w-9 h-9 flex items-center justify-center rounded-xl shadow-md cursor-pointer transition-colors border-none outline-none shrink-0 ${
+                  chatChannel === "clan" ? "bg-[#e67e22] hover:bg-[#d35400]" : "bg-blue-600 hover:bg-blue-500"
+                }`}
+              >
+                <Send className="w-3.5 h-3.5 text-white" />
+              </button>
+            </form>
+          )}
+        </div>
       </div>
     );
   };
@@ -6010,12 +6160,43 @@ export default function App() {
                           : <span className="text-gray-500">○ Офлайн / Не в сети</span>}
                       </span>
                     </div>
-                    <button 
-                      onClick={() => setActiveFriendChatId(null)}
-                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-705 text-gray-300 rounded-lg text-[10px] font-bold cursor-pointer transition-colors border-none outline-none"
-                    >
-                      ← К списку
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          const me = onlinePlayers.find(p => p.id === effectivePlayerId);
+                          if (me && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                            const currentDisabled = me.voiceSettings?.disabledVoiceSenders || [];
+                            const isCurrentlyDisabled = currentDisabled.includes(activeFriendChatId);
+                            const newDisabled = isCurrentlyDisabled 
+                              ? currentDisabled.filter(id => id !== activeFriendChatId)
+                              : [...currentDisabled, activeFriendChatId];
+                            
+                            socketRef.current.send(JSON.stringify({
+                              type: "update_voice_privacy",
+                              data: {
+                                playerId: effectivePlayerId,
+                                disabledVoiceSenders: newDisabled
+                              }
+                            }));
+                            addToast(isCurrentlyDisabled ? "🔊 Голосовые сообщения от этого игрока разрешены" : "🔇 Голосовые сообщения от этого игрока запрещены");
+                          }
+                        }}
+                        className={`w-7 h-7 flex items-center justify-center rounded-lg text-white font-bold cursor-pointer transition-colors border-none outline-none ${
+                          (onlinePlayers.find(p => p.id === effectivePlayerId)?.voiceSettings?.disabledVoiceSenders || []).includes(activeFriendChatId)
+                            ? "bg-red-500/20 hover:bg-red-500/30 text-red-400"
+                            : "bg-slate-800 hover:bg-slate-700 text-gray-400"
+                        }`}
+                        title={(onlinePlayers.find(p => p.id === effectivePlayerId)?.voiceSettings?.disabledVoiceSenders || []).includes(activeFriendChatId) ? "Разрешить голосовые" : "Запретить голосовые"}
+                      >
+                        {(onlinePlayers.find(p => p.id === effectivePlayerId)?.voiceSettings?.disabledVoiceSenders || []).includes(activeFriendChatId) ? <MicOff size={12} className="fill-current" /> : <Mic size={12} />}
+                      </button>
+                      <button 
+                        onClick={() => setActiveFriendChatId(null)}
+                        className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-705 text-gray-300 rounded-lg text-[10px] font-bold cursor-pointer transition-colors border-none outline-none"
+                      >
+                        ← К списку
+                      </button>
+                    </div>
                   </div>
 
                   {/* Dynamic Action Buttons in active chat */}
@@ -6086,7 +6267,11 @@ export default function App() {
                               </span>
                               <span className="text-gray-500 font-mono text-[8px] ml-auto">{m.timestamp}</span>
                             </div>
-                            <p className="text-white font-medium select-text whitespace-pre-wrap break-all pr-1 text-left">{m.text}</p>
+                            {m.voiceData ? (
+                              <VoicePlayer voiceData={m.voiceData} duration={m.voiceDuration} color={isSelf ? "#ffbe7a" : m.color || "#e67e22"} />
+                            ) : (
+                              <p className="text-white font-medium select-text whitespace-pre-wrap break-all pr-1 text-left">{m.text}</p>
+                            )}
                           </div>
                         );
                       })
@@ -6095,22 +6280,51 @@ export default function App() {
                   </div>
 
                   {/* Message Input Form */}
-                  <form onSubmit={sendDirectMessage} className="pt-2.5 border-t border-white/5 flex items-center gap-1.5 mt-2">
-                    <input 
-                      type="text" 
-                      value={friendChatMessageText}
-                      onChange={(e) => setFriendChatMessageText(e.target.value)}
-                      maxLength={150}
-                      placeholder="Напишите сообщение..."
-                      className="flex-1 h-10 px-3 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
-                    />
-                    <button 
-                      type="submit" 
-                      className="w-10 h-10 flex items-center justify-center rounded-xl bg-amber-600 hover:bg-amber-500 shadow-md cursor-pointer transition-colors border-none shrink-0"
-                    >
-                      <Send className="w-4 h-4 text-white" />
-                    </button>
-                  </form>
+                  <div className="pt-2.5 border-t border-white/5 flex flex-col gap-1.5 mt-2">
+                    {activeFriendVoiceStream ? (
+                      <VoiceRecorder
+                        stream={activeFriendVoiceStream}
+                        onSend={sendFriendVoiceMessage}
+                        onCancel={() => {
+                          activeFriendVoiceStream.getTracks().forEach(t => t.stop());
+                          setActiveFriendVoiceStream(null);
+                        }}
+                      />
+                    ) : (
+                      <form onSubmit={sendDirectMessage} className="flex items-center gap-1.5">
+                        <input 
+                          type="text" 
+                          value={friendChatMessageText}
+                          onChange={(e) => setFriendChatMessageText(e.target.value)}
+                          maxLength={150}
+                          placeholder="Напишите сообщение..."
+                          className="flex-1 h-10 px-3 bg-slate-950 text-white rounded-xl text-xs border border-slate-800 outline-none focus:border-slate-600 font-sans"
+                        />
+                        <button 
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                              setActiveFriendVoiceStream(stream);
+                            } catch (err) {
+                              console.error("Failed to access microphone", err);
+                              addToast((err as any)?.name === "NotFoundError" ? "🎤 Микрофон не найден на этом устройстве" : "🎤 Нет доступа к микрофону");
+                            }
+                          }}
+                          className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-gray-400 hover:text-white transition-colors outline-none cursor-pointer shrink-0"
+                          title="Записать голосовое сообщение"
+                        >
+                          <Mic size={14} />
+                        </button>
+                        <button 
+                          type="submit" 
+                          className="w-10 h-10 flex items-center justify-center rounded-xl bg-amber-600 hover:bg-amber-500 shadow-md cursor-pointer transition-colors border-none shrink-0"
+                        >
+                          <Send className="w-4 h-4 text-white" />
+                        </button>
+                      </form>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">

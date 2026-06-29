@@ -216,6 +216,10 @@ interface Player {
   notificationsEnabled?: boolean;
   clickPowerLevel?: number;
   email?: string | null;
+  voiceSettings?: {
+    globalAllowed?: boolean;
+    disabledVoiceSenders?: string[];
+  };
 }
 
 interface ChatMessage {
@@ -475,10 +479,15 @@ function getClansPrivacyList() {
 }
 
 function broadcastPlayers() {
+  const playersList = Array.from(players.values()).map(p => ({
+    ...p,
+    isAdmin: admins.includes(p.id),
+    isModerator: moderators.includes(p.id)
+  }));
   broadcast({
     type: "players_update",
     data: {
-      players: Array.from(players.values()),
+      players: playersList,
       clanPrivacy: getClansPrivacyList()
     }
   });
@@ -540,7 +549,11 @@ wss.on("connection", (ws: WebSocket) => {
               isOnline: true,
               telegramId: telegramId || null,
               autoClickerLevel: typeof autoClickerLevel === "number" ? autoClickerLevel : 0,
-              email: email || null
+              email: email || null,
+              voiceSettings: players.get(id)?.voiceSettings || {
+                globalAllowed: true,
+                disabledVoiceSenders: []
+              }
             });
 
             // Log in Google Sheets if applicable
@@ -710,24 +723,38 @@ wss.on("connection", (ws: WebSocket) => {
         }
 
         case "chat_msg": {
-          const { playerId: senderId, text, isClanOnly } = event.data;
+          const { playerId: senderId, text, isClanOnly, voiceData, voiceDuration } = event.data;
           const player = players.get(senderId);
-          if (player && text.trim()) {
+          if (player && ((text && text.trim()) || voiceData)) {
+            // Check time restriction if sending voice to global lobby
+            if (voiceData && !isClanOnly) {
+              const moscowHour = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Moscow" })).getHours();
+              if (!isHourInInterval(moscowHour, voiceStartHour, voiceEndHour)) {
+                ws.send(JSON.stringify({
+                  type: "chat_msg_error",
+                  data: { error: `Голосовые сообщения в общем чате разрешены только с ${voiceStartHour}:00 до ${voiceEndHour}:00 по МСК!` }
+                }));
+                break;
+              }
+            }
+
             const timeStr = new Date().toLocaleTimeString("ru-RU", {
               timeZone: "Europe/Moscow",
               hour: "2-digit",
               minute: "2-digit",
             });
 
-            const newMsg: ChatMessage = {
+            const newMsg: any = {
               id: Math.random().toString(36).substring(2, 9),
               playerId: senderId,
               playerName: player.name,
               clan: player.clan,
-              text: text.substring(0, 150).trim(), // limit message length
+              text: text ? text.substring(0, 150).trim() : "[Голосовое сообщение]",
               timestamp: timeStr,
               color: player.color,
               isClanOnly: !!isClanOnly,
+              voiceData: voiceData || null,
+              voiceDuration: typeof voiceDuration === "number" ? voiceDuration : null,
             };
 
             if (isClanOnly) {
@@ -757,7 +784,7 @@ wss.on("connection", (ws: WebSocket) => {
               });
 
               // Process mentions (@all or specific players) in global chat for Telegram notifications
-              const textContent = newMsg.text;
+              const textContent = newMsg.text || "";
               const mentionRegex = /@([\w\u0400-\u04FF]+)/g;
               const matches = textContent.match(mentionRegex);
               if (matches && matches.length > 0) {
@@ -845,15 +872,46 @@ wss.on("connection", (ws: WebSocket) => {
           break;
         }
 
+        case "delete_chat_msg": {
+          const { playerId, messageId } = event.data;
+          const player = players.get(playerId);
+          if (player && (admins.includes(playerId) || moderators.includes(playerId))) {
+            const payload = JSON.stringify({
+              type: "delete_chat_msg_broadcast",
+              data: { messageId }
+            });
+            wss.clients.forEach((client) => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(payload);
+              }
+            });
+          }
+          break;
+        }
+
         case "direct_msg": {
           const senderId = (ws as any).playerId;
-          const { recipientId, text } = event.data;
+          const { recipientId, text, voiceData, voiceDuration } = event.data;
           if (!senderId) {
             console.warn("[DirectMsg Fail] Sender socket is not registered!");
             break;
           }
           const player = players.get(senderId);
-          if (player && text.trim() && recipientId && recipientId !== "undefined" && recipientId !== "null") {
+          if (player && ((text && text.trim()) || voiceData) && recipientId && recipientId !== "undefined" && recipientId !== "null") {
+            const recipient = players.get(recipientId);
+            
+            // Check if recipient has blocked voice messages from sender
+            if (voiceData && recipient) {
+              const disabledSenders = recipient.voiceSettings?.disabledVoiceSenders || [];
+              if (disabledSenders.includes(senderId)) {
+                ws.send(JSON.stringify({
+                  type: "direct_msg_error",
+                  data: { recipientId, error: "Собеседник ограничил получение голосовых сообщений от вас." }
+                }));
+                break;
+              }
+            }
+
             const timeStr = new Date().toLocaleTimeString("ru-RU", {
               timeZone: "Europe/Moscow",
               hour: "2-digit",
@@ -865,9 +923,11 @@ wss.on("connection", (ws: WebSocket) => {
               senderId: senderId,
               senderName: player.name,
               recipientId: recipientId,
-              text: text.substring(0, 150).trim(),
+              text: text ? text.substring(0, 150).trim() : "[Голосовое сообщение]",
               timestamp: timeStr,
               color: player.color,
+              voiceData: voiceData || null,
+              voiceDuration: typeof voiceDuration === "number" ? voiceDuration : null,
             };
 
             const payload = JSON.stringify({
@@ -893,21 +953,20 @@ wss.on("connection", (ws: WebSocket) => {
             ws.send(payload);
  
              // Notify recipient via Telegram or VK if offline (no active websocket socket open)
-             const recipient = players.get(recipientId);
              if (recipient && recipient.telegramId && !hasActiveSocket) {
                const isVkRecipient = (recipient.email && String(recipient.email).startsWith("vk_")) || 
                                      (recipient.username && String(recipient.username).startsWith("vk_")) ||
                                      String(recipient.id).startsWith("vk_");
                
                if (isVkRecipient) {
-                 const vkMessageText = `📩 *Новое личное сообщение от ${player.name}:*\n\n${text}`;
+                 const vkMessageText = `📩 *Новое личное сообщение от ${player.name}:*\n\n${newMsg.text}`;
                  sendVkMessage(Number(recipient.telegramId), vkMessageText).catch(err => 
                    console.error(`Failed to send VK DM notification to ${recipient.name}:`, err)
                  );
                } else {
                  sendCleanBotMessage(
                    Number(recipient.telegramId), 
-                   `📩 *Новое личное сообщение от ${player.name}:*\n\n${text}`,
+                   `📩 *Новое личное сообщение от ${player.name}:*\n\n${newMsg.text}`,
                    {
                       keepHistory: true,
                       reply_markup: {
@@ -1018,6 +1077,20 @@ wss.on("connection", (ws: WebSocket) => {
           break;
         }
 
+        case "update_voice_privacy": {
+          const { playerId, disabledVoiceSenders } = event.data;
+          const player = players.get(playerId);
+          if (player) {
+            player.voiceSettings = {
+              globalAllowed: true,
+              disabledVoiceSenders: Array.isArray(disabledVoiceSenders) ? disabledVoiceSenders : []
+            };
+            players.set(playerId, player);
+            broadcastPlayers();
+          }
+          break;
+        }
+
         case "ping": {
           ws.send(JSON.stringify({ type: "pong" }));
           break;
@@ -1068,6 +1141,16 @@ let admins: string[] = [];
 let moderators: string[] = [];
 let whitelistEnabled: boolean = true;
 let whitelistCodes: string[] = ["777777", "123456", "000000", "111111", "999999", "666666", "222222", "333333"];
+let voiceStartHour = 22;
+let voiceEndHour = 7;
+
+function isHourInInterval(hour: number, start: number, end: number) {
+  if (start <= end) {
+    return hour >= start && hour < end;
+  } else {
+    return hour >= start || hour < end;
+  }
+}
 
 function loadConfig() {
   try {
@@ -1082,6 +1165,12 @@ function loadConfig() {
       if (data.whitelistCodes && Array.isArray(data.whitelistCodes)) {
         whitelistCodes = data.whitelistCodes;
       }
+      if (typeof data.voiceStartHour === "number") {
+        voiceStartHour = data.voiceStartHour;
+      }
+      if (typeof data.voiceEndHour === "number") {
+        voiceEndHour = data.voiceEndHour;
+      }
     }
   } catch (e) {
     console.error("Failed to read sheet config:", e);
@@ -1092,7 +1181,7 @@ function saveConfig() {
   try {
     fs.writeFileSync(
       CONFIG_FILE,
-      JSON.stringify({ masterSheetId, admins, moderators, whitelistEnabled, whitelistCodes }, null, 2),
+      JSON.stringify({ masterSheetId, admins, moderators, whitelistEnabled, whitelistCodes, voiceStartHour, voiceEndHour }, null, 2),
       "utf8"
     );
   } catch (e) {
@@ -2643,7 +2732,9 @@ async function start() {
       admins,
       moderators,
       whitelistEnabled,
-      whitelistCodes
+      whitelistCodes,
+      voiceStartHour,
+      voiceEndHour
     });
   });
 
@@ -2668,16 +2759,18 @@ async function start() {
   // POST update admin config settings
   app.post("/api/admin/config", (req, res) => {
     try {
-      const { masterSheetId: newSheetId, admins: newAdmins, moderators: newModerators, whitelistEnabled: newWhitelistEnabled, whitelistCodes: newWhitelistCodes } = req.body;
+      const { masterSheetId: newSheetId, admins: newAdmins, moderators: newModerators, whitelistEnabled: newWhitelistEnabled, whitelistCodes: newWhitelistCodes, voiceStartHour: newVoiceStart, voiceEndHour: newVoiceEnd } = req.body;
       
       if (typeof newSheetId === "string") masterSheetId = newSheetId;
       if (Array.isArray(newAdmins)) admins = newAdmins;
       if (Array.isArray(newModerators)) moderators = newModerators;
       if (typeof newWhitelistEnabled === "boolean") whitelistEnabled = newWhitelistEnabled;
       if (Array.isArray(newWhitelistCodes)) whitelistCodes = newWhitelistCodes;
+      if (typeof newVoiceStart === "number") voiceStartHour = newVoiceStart;
+      if (typeof newVoiceEnd === "number") voiceEndHour = newVoiceEnd;
       
       saveConfig();
-      res.json({ success: true, masterSheetId, admins, moderators, whitelistEnabled, whitelistCodes });
+      res.json({ success: true, masterSheetId, admins, moderators, whitelistEnabled, whitelistCodes, voiceStartHour, voiceEndHour });
     } catch (err: any) {
       console.error("Failed to update config:", err);
       res.status(500).json({ success: false, error: err.message || "Ошибка обновления настроек" });
