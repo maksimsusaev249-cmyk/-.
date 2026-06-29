@@ -5971,7 +5971,7 @@ export default function App() {
 
                   {/* Tab Contents: Players List */}
                   {myClanActiveTab === "players" && (
-                    <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto pr-1 animate-fade-in">
+                    <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1 animate-fade-in">
                       {isLoadingMyClanMembers ? (
                         <div className="text-xs text-gray-500 text-center py-4 animate-pulse uppercase tracking-wider font-bold">
                           Загрузка состава клана...
