@@ -252,6 +252,8 @@ const chatMessages: ChatMessage[] = [];
 interface ClanConfig {
   name: string;
   password?: string;
+  creatorId?: string;
+  voiceEnabled?: boolean;
 }
 // Clan configs storing password details
 const clansConfig: Map<string, ClanConfig> = new Map();
@@ -408,6 +410,100 @@ async function syncUsersFromFirestore() {
   }
 }
 
+function ensureClanInConfig(clanName: string | null | undefined, playerId: string) {
+  if (!clanName) return;
+  const trimmed = clanName.trim();
+  if (!trimmed) return;
+  if (!clansConfig.has(trimmed)) {
+    // Save to memory config assuming first seen member is the creator
+    clansConfig.set(trimmed, {
+      name: trimmed,
+      creatorId: playerId,
+      voiceEnabled: true
+    });
+    // Sync with Firestore
+    getAuthenticatedDb().then((dbInstance) => {
+      if (dbInstance) {
+        const clanRef = doc(dbInstance, "clans", trimmed);
+        getDoc(clanRef).then((snap) => {
+          if (!snap.exists()) {
+            setDoc(clanRef, {
+              name: trimmed,
+              creatorId: playerId,
+              voiceEnabled: true
+            }).catch((err) => console.error("[Ensure Clan Firestore Error]", err));
+          } else {
+            const data = snap.data();
+            if (!data.creatorId) {
+              updateDoc(clanRef, { creatorId: playerId }).catch(() => {});
+            }
+          }
+        }).catch((err) => {
+          console.error("Error checking clan doc in ensure:", err);
+        });
+      }
+    });
+  } else {
+    // If it exists in clansConfig but lacks a creatorId, assign the current player
+    const config = clansConfig.get(trimmed);
+    if (config && !config.creatorId) {
+      config.creatorId = playerId;
+      clansConfig.set(trimmed, config);
+
+      getAuthenticatedDb().then((dbInstance) => {
+        if (dbInstance) {
+          const clanRef = doc(dbInstance, "clans", trimmed);
+          updateDoc(clanRef, { creatorId: playerId }).catch(() => {});
+        }
+      });
+    }
+  }
+}
+
+let isClansHydrated = false;
+
+async function syncClansFromFirestore() {
+  try {
+    const dbInstance = await getAuthenticatedDb();
+    if (!dbInstance) {
+      console.warn("[Clans Sync] Database not available, skipping hydration.");
+      return;
+    }
+    const clansCol = collection(dbInstance, "clans");
+    
+    console.log("[Clans Sync] Subscribing to 'clans' collection in Firestore...");
+    onSnapshot(clansCol, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        const name = change.doc.id;
+        const data = change.doc.data();
+        
+        if (change.type === "added" || change.type === "modified") {
+          clansConfig.set(name, {
+            name: name,
+            password: data.password || undefined,
+            creatorId: data.creatorId || undefined,
+            voiceEnabled: data.voiceEnabled !== false
+          });
+        } else if (change.type === "removed") {
+          clansConfig.delete(name);
+        }
+      });
+      
+      if (!isClansHydrated) {
+        isClansHydrated = true;
+        console.log(`[Clans Sync] Initial hydration complete. Total clans loaded: ${clansConfig.size}`);
+      }
+      
+      // Update everyone with active clan list details
+      broadcastPlayers();
+    }, (error) => {
+      console.error("[Clans Sync] error in onSnapshot:", error);
+    });
+  } catch (err) {
+    console.error("[Clans Sync] Failed to initialize real-time clan sync:", err);
+  }
+}
+
 function broadcastClanWarState() {
   broadcast({
     type: "clan_war_update",
@@ -474,7 +570,9 @@ function broadcast(data: any) {
 function getClansPrivacyList() {
   return Array.from(clansConfig.entries()).map(([name, c]) => ({
     name,
-    isPrivate: !!c.password
+    isPrivate: !!c.password,
+    creatorId: c.creatorId,
+    voiceEnabled: c.voiceEnabled !== false
   }));
 }
 
@@ -629,6 +727,9 @@ wss.on("connection", (ws: WebSocket) => {
           if (player) {
             player.name = name || player.name;
             player.clan = clan || null;
+            if (clan) {
+              ensureClanInConfig(clan, id);
+            }
             player.coins = typeof coins === "number" ? coins : player.coins;
             player.clicks = typeof clicks === "number" ? clicks : player.clicks;
             player.lastSeen = Date.now();
@@ -986,13 +1087,29 @@ wss.on("connection", (ws: WebSocket) => {
         }
 
         case "create_clan": {
-          const { id, name, password } = event.data;
+          const { id, name, password, voiceEnabled } = event.data;
           const trimmedName = (name || "").trim();
           const player = players.get(id);
           if (trimmedName && player) {
+            getAuthenticatedDb().then((dbInstance) => {
+              if (dbInstance) {
+                const clanRef = doc(dbInstance, "clans", trimmedName);
+                setDoc(clanRef, {
+                  name: trimmedName,
+                  password: password ? password.trim() : "",
+                  creatorId: id,
+                  voiceEnabled: voiceEnabled !== false
+                }, { merge: true }).catch((err) => {
+                  console.error("[Create Clan Firestore Error]", err);
+                });
+              }
+            });
+
             clansConfig.set(trimmedName, {
               name: trimmedName,
-              password: password ? password.trim() : undefined
+              password: password ? password.trim() : undefined,
+              creatorId: id,
+              voiceEnabled: voiceEnabled !== false
             });
             player.clan = trimmedName;
             players.set(id, player);
@@ -1031,7 +1148,24 @@ wss.on("connection", (ws: WebSocket) => {
               }
             }
             if (!config) {
-              clansConfig.set(clanName, { name: clanName });
+              getAuthenticatedDb().then((dbInstance) => {
+                if (dbInstance) {
+                  const clanRef = doc(dbInstance, "clans", clanName);
+                  setDoc(clanRef, {
+                    name: clanName,
+                    creatorId: id,
+                    voiceEnabled: true
+                  }, { merge: true }).catch((err) => {
+                    console.error("[Join Clan New Config Firestore Error]", err);
+                  });
+                }
+              });
+
+              clansConfig.set(clanName, { 
+                name: clanName,
+                creatorId: id,
+                voiceEnabled: true
+              });
             }
 
             player.clan = clanName;
@@ -1052,6 +1186,44 @@ wss.on("connection", (ws: WebSocket) => {
               type: "join_clan_res",
               data: { success: false, error: "Ошибка при вступлении в клан!" }
             }));
+          }
+          break;
+        }
+
+        case "update_clan_voice": {
+          const { clanName, voiceEnabled, playerId } = event.data;
+          let config = clansConfig.get(clanName);
+          if (!config) {
+            config = {
+              name: clanName,
+              creatorId: playerId,
+              voiceEnabled: voiceEnabled !== false
+            };
+            clansConfig.set(clanName, config);
+          }
+          if (!config.creatorId) {
+            config.creatorId = playerId;
+            clansConfig.set(clanName, config);
+          }
+          
+          if (config.creatorId === playerId) {
+            config.voiceEnabled = voiceEnabled;
+            clansConfig.set(clanName, config);
+
+            getAuthenticatedDb().then((dbInstance) => {
+              if (dbInstance) {
+                const clanRef = doc(dbInstance, "clans", clanName);
+                setDoc(clanRef, {
+                  name: clanName,
+                  creatorId: config.creatorId,
+                  voiceEnabled: voiceEnabled
+                }, { merge: true }).catch((err) => {
+                  console.error("[Update Clan Voice Firestore Error]", err);
+                });
+              }
+            });
+
+            broadcastPlayers();
           }
           break;
         }
@@ -2985,6 +3157,11 @@ async function start() {
     // Start background real-time user database synchronizer to support 24/7 clan battles and persistency
     syncUsersFromFirestore().catch((err) => {
       console.error("User db synchronizer routine failed:", err);
+    });
+
+    // Start background real-time clans config database synchronizer
+    syncClansFromFirestore().catch((err) => {
+      console.error("Clans db synchronizer routine failed:", err);
     });
 
     // Start background polling for Telegram Bot commands/login codes
