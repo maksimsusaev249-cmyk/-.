@@ -1121,12 +1121,18 @@ wss.on("connection", (ws: WebSocket) => {
 
 // Setup Upgrade path routing hook for standard websockets
 httpServer.on("upgrade", (request, socket, head) => {
-  const pathname = new URL(request.url || "", `http://${request.headers.host}`).pathname;
-  if (pathname === "/ws") {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request);
-    });
-  } else if (process.env.NODE_ENV === "production") {
+  try {
+    const urlString = request.url || "";
+    const pathname = urlString.split('?')[0];
+    if (pathname === "/ws") {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    } else if (process.env.NODE_ENV === "production") {
+      socket.destroy();
+    }
+  } catch (err) {
+    console.error("Upgrade error:", err);
     socket.destroy();
   }
 });
@@ -2505,7 +2511,103 @@ async function start() {
     }
   });
 
+  // Map to store temporary QR login tokens: token -> { uid, email, password, displayName, photoURL, createdAt }
+  const qrLoginTokens = new Map<string, {
+    uid: string;
+    email: string;
+    password?: string;
+    displayName?: string;
+    photoURL?: string;
+    createdAt: number;
+  }>();
+
   // API Telegram Verification Code Login Endpoint
+  app.post("/api/generate-login-token", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+      const idToken = authHeader.split("Bearer ")[1];
+      const decoded = await getAuth().verifyIdToken(idToken);
+      const uid = decoded.uid;
+      const email = decoded.email || `${uid}@click-clan-temp.game`;
+      const displayName = decoded.name || email.split("@")[0];
+      const photoURL = decoded.picture || "";
+
+      const { password } = req.body;
+      let finalPassword = password;
+
+      if (!finalPassword) {
+        // Generate a temporary password if none is provided
+        finalPassword = "qr_gen_pw_" + crypto.randomBytes(8).toString("hex");
+        try {
+          await getAuth().updateUser(uid, { password: finalPassword });
+        } catch (updateErr: any) {
+          console.error("Failed to set temporary password for QR login:", updateErr);
+        }
+      }
+
+      // Generate random secure token
+      const token = crypto.randomUUID();
+      qrLoginTokens.set(token, {
+        uid,
+        email,
+        password: finalPassword,
+        displayName,
+        photoURL,
+        createdAt: Date.now()
+      });
+
+      // Cleanup old tokens (older than 5 mins)
+      const now = Date.now();
+      for (const [key, value] of qrLoginTokens.entries()) {
+        if (now - value.createdAt > 300000) {
+          qrLoginTokens.delete(key);
+        }
+      }
+
+      res.json({ success: true, token });
+    } catch (err: any) {
+      console.error("Token generation error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/exchange-login-token", async (req, res) => {
+    try {
+      const { token } = req.body;
+      if (!token || typeof token !== "string") {
+        return res.status(400).json({ success: false, error: "Токен обязателен." });
+      }
+
+      const tokenData = qrLoginTokens.get(token);
+      if (!tokenData) {
+        return res.status(404).json({ success: false, error: "Недействительный или просроченный токен." });
+      }
+
+      // Check expiration (5 minutes)
+      if (Date.now() - tokenData.createdAt > 300000) {
+        qrLoginTokens.delete(token);
+        return res.status(410).json({ success: false, error: "Срок действия токена истек." });
+      }
+
+      // Single-use token: remove immediately
+      qrLoginTokens.delete(token);
+
+      res.json({
+        success: true,
+        email: tokenData.email,
+        password: tokenData.password,
+        displayName: tokenData.displayName || "Игрок",
+        photoURL: tokenData.photoURL || ""
+      });
+    } catch (err: any) {
+      console.error("Token exchange error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post("/api/telegram-code-login", async (req, res) => {
     try {
       const { code } = req.body;

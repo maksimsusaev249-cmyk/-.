@@ -10,6 +10,8 @@ interface VoiceRecorderProps {
 export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, stream }) => {
   const [isRecording, setIsRecording] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [hasTimeLimit, setHasTimeLimit] = useState(true);
+  const TIME_LIMIT = 60;
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -126,6 +128,12 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
     }
   };
 
+  useEffect(() => {
+    if (hasTimeLimit && recordingTime >= TIME_LIMIT) {
+      sendRecording();
+    }
+  }, [recordingTime, hasTimeLimit]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -133,25 +141,39 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
   };
 
   return (
-    <div id="voice-recorder-root" className="flex items-center justify-between gap-2 bg-slate-900 border border-amber-500/30 rounded-xl p-1 h-10 shadow-inner">
+    <div id="voice-recorder-root" className="flex items-center justify-between gap-1.5 bg-slate-900 border border-amber-500/30 rounded-xl p-1 h-10 shadow-inner">
       <button
         type="button"
         onClick={cancelRecording}
-        className="flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+        className="flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer flex-shrink-0"
         title="Отменить"
       >
         <Trash2 size={16} />
       </button>
 
-      <div className="flex items-center gap-2 flex-1 justify-center">
+      <div className="flex items-center gap-2 flex-1 justify-center relative">
         <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-        <span className="text-xs font-mono text-white font-bold">{formatTime(recordingTime)}</span>
+        <span className="text-xs font-mono text-white font-bold tracking-wider">{formatTime(recordingTime)}</span>
+        
+        {/* Toggle Tumbler */}
+        <button
+          type="button"
+          onClick={() => setHasTimeLimit(!hasTimeLimit)}
+          className={`absolute right-0 flex items-center justify-center px-1.5 h-6 rounded-md text-[9px] font-bold uppercase transition-colors cursor-pointer border ${
+            hasTimeLimit 
+              ? "bg-amber-500/20 text-amber-400 border-amber-500/30" 
+              : "bg-slate-800 text-gray-500 border-white/5"
+          }`}
+          title={hasTimeLimit ? "Лимит включен" : "Без лимита"}
+        >
+          {hasTimeLimit ? `ЛИМИТ ${TIME_LIMIT}С` : "БЕЗ ЛИМИТА"}
+        </button>
       </div>
 
       <button
         type="button"
         onClick={sendRecording}
-        className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400 transition-all cursor-pointer"
+        className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400 transition-all cursor-pointer flex-shrink-0"
         title="Отправить"
       >
         <ArrowUp size={16} className="stroke-[3px]" />

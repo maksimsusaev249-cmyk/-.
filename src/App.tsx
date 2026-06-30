@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   Globe, 
   Settings, 
@@ -61,7 +61,7 @@ import { VoiceRecorder } from "./components/VoiceRecorder";
 import { VoicePlayer } from "./components/VoicePlayer";
 import { auth, db, googleProvider, signInWithPopup, signOut } from "./firebase";
 import { doc, getDocFromServer, getDoc, setDoc, serverTimestamp, collection, addDoc, getDocs, query, where, onSnapshot, deleteDoc, updateDoc, runTransaction, limit, increment } from "firebase/firestore";
-import { onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { onAuthStateChanged, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signInWithCustomToken } from "firebase/auth";
 import { Leaderboard } from "./components/Leaderboard";
 import { AdminConsole } from "./components/AdminConsole";
 import { getApiUrl } from "./utils/api";
@@ -1041,6 +1041,8 @@ export default function App() {
 
   const [toastHistory, setToastHistory] = useState<string[]>([]);
   const [telegramNotificationsEnabled, setTelegramNotificationsEnabled] = useState(true);
+  const [loginQrToken, setLoginQrToken] = useState<string | null>(null);
+  const [isGeneratingLoginQr, setIsGeneratingLoginQr] = useState(false);
   const [isLiquidGlass, setIsLiquidGlass] = useState<boolean>(() => {
     const saved = safeGetItem("gameLiquidGlass");
     return saved ? JSON.parse(saved) : false;
@@ -1533,8 +1535,8 @@ export default function App() {
           }
         };
 
-        socket.onerror = (err) => {
-          console.error("WebSocket connection error:", err);
+        socket.onerror = () => {
+          // Silent error to prevent console spam during reconnects
           socket.close();
         };
 
@@ -2676,6 +2678,42 @@ export default function App() {
 
   const handleQrScanned = (text: string) => {
     try {
+      let token = "";
+      if (text.includes("login_token=")) {
+        const parts = text.split("login_token=");
+        if (parts.length > 1) {
+          token = decodeURIComponent(parts[1].split("&")[0].split("#")[0]);
+        }
+      } else if (text.trim().length === 36 || /^[a-f0-9-]{36}$/i.test(text.trim())) {
+        token = text.trim();
+      } else if (text.trim().length > 10 && !text.includes("clan=") && !text.includes("ref=")) {
+        token = text.trim();
+      }
+
+      if (token) {
+        setIsScanModalOpen(false);
+        addToast("🔄 Выполняется вход по коду...");
+        fetch(getApiUrl("/api/exchange-login-token"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token })
+        })
+          .then(async (res) => {
+            const data = await res.json();
+            if (data.success) {
+              await performTelegramAuth(data.email, data.password, data.displayName, data.photoURL);
+              addToast("✅ Вход успешно выполнен!");
+            } else {
+              addToast(`❌ Ошибка: ${data.error || "Не удалось войти по коду."}`);
+            }
+          })
+          .catch((err) => {
+            console.error("QR login error:", err);
+            addToast("❌ Ошибка входа по коду. Возможно, срок действия истек.");
+          });
+        return;
+      }
+
       if (text.includes("clan=")) {
         let clanName = "";
         try {
@@ -2698,6 +2736,13 @@ export default function App() {
         if (clanName) {
           addToast(`🏰 Обнаружен QR-код клана "${clanName}"!`);
           setIsScanModalOpen(false);
+          
+          if (!currentUser) {
+            safeSetItem("game_join_clan_name", clanName);
+            addToast("⚠️ Авторизуйтесь, чтобы вступить в клан!");
+            return;
+          }
+
           setPendingClanInvite(clanName);
           setPendingClanPassword("");
           return;
@@ -2718,8 +2763,15 @@ export default function App() {
       
       refId = refId.trim();
       setReferralCodeInput(refId);
-      addToast("📋 Код приглашения успешно считан!");
       setIsScanModalOpen(false);
+      
+      if (!currentUser) {
+        safeSetItem("game_referrer_id", refId);
+        addToast("📋 Код приглашения сохранен! Авторизуйтесь для входа.");
+        return;
+      }
+      
+      addToast("📋 Код приглашения успешно считан!");
       handleApplyReferrer(refId);
     } catch (e) {
       console.error("Failed to parse scanned QR code:", e);
@@ -2743,41 +2795,40 @@ export default function App() {
       });
   };
 
-  // Camera scanner subscription
-  useEffect(() => {
-    let html5QrCode: Html5Qrcode | null = null;
-    if (isScanModalOpen) {
-      const timer = setTimeout(() => {
-        try {
-          html5QrCode = new Html5Qrcode("qr-reader");
-          html5QrCode.start(
-            { facingMode: "environment" },
-            {
-              fps: 10,
-              qrbox: { width: 220, height: 220 }
-            },
-            (decodedText) => {
-              handleQrScanned(decodedText);
-            },
-            () => {}
-          ).catch(err => {
-            console.error("Camera start error:", err);
-            addToast("⚠️ Камера недоступна. Выберите файл-скриншот или введите код вручную!");
-          });
-        } catch (e) {
-          console.error("Scanner initialization error:", e);
+  const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
+
+  const qrReaderRefCallback = useCallback((node: HTMLDivElement | null) => {
+    if (node) {
+      try {
+        const scanner = new Html5Qrcode(node.id);
+        html5QrCodeRef.current = scanner;
+        scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 220, height: 220 }
+          },
+          (decodedText) => {
+            handleQrScanned(decodedText);
+          },
+          () => {}
+        ).catch(err => {
+          console.error("Camera start error:", err);
+          addToast("⚠️ Камера недоступна. Выберите файл-скриншот или введите код вручную!");
+        });
+      } catch (e) {
+        console.error("Scanner initialization error:", e);
+      }
+    } else {
+      if (html5QrCodeRef.current) {
+        const scanner = html5QrCodeRef.current;
+        html5QrCodeRef.current = null;
+        if (scanner.isScanning) {
+          scanner.stop().catch(err => console.warn("Failed to stop scanner:", err));
         }
-      }, 300);
-      return () => {
-        clearTimeout(timer);
-        if (html5QrCode) {
-          if (html5QrCode.isScanning) {
-            html5QrCode.stop().catch(err => console.warn("Failed to stop scanner:", err));
-          }
-        }
-      };
+      }
     }
-  }, [isScanModalOpen]);
+  }, []);
 
   // Periodic autosave every 60 seconds of play
   useEffect(() => {
@@ -6487,7 +6538,7 @@ export default function App() {
                       👥 Пригласить друга {!isInviteOptionsOpen ? "▼" : "▲"}
                     </button>
 
-                    {/* Sub-buttons Panel with smooth motion layout */}
+                    {/* Sub-buttons Panel */}
                     {isInviteOptionsOpen && (
                       <div className="grid grid-cols-3 gap-2 mt-1 animate-fade-in">
                         {/* Button 1: Give QR Code */}
@@ -6523,30 +6574,18 @@ export default function App() {
                           type="button"
                           onClick={async () => {
                             const textToCopy = refLink;
-                            let copied = false;
                             try {
-                              if (navigator.clipboard && navigator.clipboard.writeText) {
-                                await navigator.clipboard.writeText(textToCopy);
-                                copied = true;
-                              }
+                              await navigator.clipboard.writeText(textToCopy);
                             } catch (e) {
-                              console.warn("navigator.clipboard failed, trying fallback", e);
-                            }
-
-                            if (!copied) {
-                              try {
-                                const textArea = document.createElement("textarea");
-                                textArea.value = textToCopy;
-                                textArea.style.position = "fixed";
-                                textArea.style.opacity = "0";
-                                document.body.appendChild(textArea);
-                                textArea.focus();
-                                textArea.select();
-                                copied = document.execCommand('copy');
-                                document.body.removeChild(textArea);
-                              } catch (e) {
-                                console.error("Fallback copy failed", e);
-                              }
+                              const textArea = document.createElement("textarea");
+                              textArea.value = textToCopy;
+                              textArea.style.position = "fixed";
+                              textArea.style.opacity = "0";
+                              document.body.appendChild(textArea);
+                              textArea.focus();
+                              textArea.select();
+                              document.execCommand('copy');
+                              document.body.removeChild(textArea);
                             }
 
                             addToast("📋 Реферальная ссылка скопирована в буфер обмена!");
@@ -6676,59 +6715,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* SCAN MODAL */}
-                {isScanModalOpen && (
-                  <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-                    <div className="bg-[#0f172a] border border-white/10 w-full max-w-sm rounded-3xl p-5 flex flex-col gap-4 relative shadow-2xl animate-scale-up">
-                      <div className="flex justify-between items-center border-b border-white/5 pb-2">
-                        <span className="text-xs font-black uppercase tracking-wider text-white">
-                          Сканировать QR-код
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setIsScanModalOpen(false)}
-                          className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
-                        >
-                          ✕
-                        </button>
-                      </div>
-
-                      {/* Camera Scanner Viewport */}
-                      <div className="relative">
-                        <div
-                          id="qr-reader"
-                          className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500"
-                        >
-                          Запуск камеры...
-                        </div>
-                        {/* Target frame decoration */}
-                        <div className="absolute inset-x-12 inset-y-12 border-2 border-emerald-500/40 rounded-2xl pointer-events-none animate-pulse flex items-center justify-center">
-                          <div className="w-4 h-4 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
-                          <div className="w-4 h-4 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
-                          <div className="w-4 h-4 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
-                          <div className="w-4 h-4 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
-                        </div>
-                      </div>
-
-                      {/* Image Upload Trigger */}
-                      <div className="flex flex-col gap-2">
-                        <span className="text-[10px] text-gray-400 text-center uppercase font-bold tracking-wide">
-                          Или выберите скриншот QR-кода
-                        </span>
-                        <label className="w-full py-2.5 bg-slate-900 border border-white/5 hover:border-[#e67e22]/20 text-white font-black text-[10px] uppercase tracking-wider rounded-xl text-center cursor-pointer transition-all">
-                          📂 Выбрать скриншот
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleQrImageUpload}
-                            className="hidden"
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {/* QR CODE DISPLAY MODAL */}
                 {showQrModal && (
                   <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -6776,9 +6762,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
-                {/* Hidden QR Dummy container for image scanner library */}
-                <div id="qr-reader-dummy" className="hidden" />
               </div>
             );
           })()}
@@ -7363,6 +7346,51 @@ export default function App() {
     );
   };
 
+  const generateLoginQrToken = async () => {
+    if (!currentUser) return;
+    setIsGeneratingLoginQr(true);
+    try {
+      const idToken = await currentUser.getIdToken();
+      
+      // Look up current password in local saved accounts to avoid forcing user password resets
+      let storedPassword: string | undefined = undefined;
+      try {
+        const savedAccountsRaw = localStorage.getItem("gameSavedAccountsV1");
+        if (savedAccountsRaw) {
+          const accounts = JSON.parse(savedAccountsRaw);
+          if (Array.isArray(accounts)) {
+            const found = accounts.find((acc: any) => acc.uid === currentUser.uid);
+            if (found && found.password) {
+              storedPassword = found.password;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Could not read local accounts storage:", err);
+      }
+
+      const res = await fetch(getApiUrl("/api/generate-login-token"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
+        body: JSON.stringify({ password: storedPassword })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLoginQrToken(data.token);
+      } else {
+        addToast(`❌ Ошибка: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      addToast("❌ Ошибка при генерации QR-кода.");
+    } finally {
+      setIsGeneratingLoginQr(false);
+    }
+  };
+
   const renderSettingsContent = () => {
     return (
       <div className="flex flex-col h-full min-h-0 text-white gap-4 font-sans select-none overflow-y-auto pb-4 pr-1 scrollbar-none">
@@ -7471,6 +7499,32 @@ export default function App() {
                   )}
               </div>
               
+              {/* Login QR code export */}
+              <div className="flex flex-col gap-2 bg-black/30 px-3 py-3 rounded-xl border border-white/5 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-[#aab3c4]">Войти на другом устройстве</span>
+                    <span className="text-[9px] font-mono font-black mt-0.5 text-gray-400">Сгенерировать QR-код</span>
+                  </div>
+                  <button
+                    onClick={generateLoginQrToken}
+                    disabled={isGeneratingLoginQr}
+                    className="py-1 px-3 bg-indigo-600/80 hover:bg-indigo-500 transition-colors text-[10px] font-black rounded-lg text-white disabled:opacity-50"
+                  >
+                    {isGeneratingLoginQr ? "Создание..." : "Создать"}
+                  </button>
+                </div>
+                {loginQrToken && (
+                  <div className="mt-2 bg-white p-2 rounded-xl flex items-center justify-center border border-white/10 mx-auto animate-fade-in">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`login_token=${loginQrToken}`)}`}
+                      alt="Login QR Code"
+                      className="w-32 h-32 object-contain"
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-2 mt-0.5">
 
                 <button 
@@ -8245,7 +8299,7 @@ export default function App() {
                   </svg>
                 </button>
                 <button 
-                  onClick={() => { setIsAuthModalOpen(false); setIsScanModalOpen(true); }} 
+                  onClick={() => { setIsScanModalOpen(true); }} 
                   className="w-14 h-14 bg-slate-800 hover:bg-slate-700 active:scale-90 text-emerald-400 rounded-2xl flex items-center justify-center transition-all shadow-md cursor-pointer border-none outline-none"
                   title="Войти по QR-коду"
                 >
@@ -8446,6 +8500,63 @@ export default function App() {
             </motion.div>
           </div>
         )}
+
+        {/* GLOBAL SCAN MODAL */}
+        {isScanModalOpen && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[5000] flex items-center justify-center p-4">
+            <div className="bg-[#0f172a] border border-white/10 w-full max-w-sm rounded-3xl p-5 flex flex-col gap-4 relative shadow-2xl animate-scale-up">
+              <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                <span className="text-xs font-black uppercase tracking-wider text-white">
+                  Сканировать QR-код
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsScanModalOpen(false)}
+                  className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Camera Scanner Viewport */}
+              <div className="relative">
+                <div
+                  ref={qrReaderRefCallback}
+                  id="qr-reader"
+                  className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500"
+                >
+                  Запуск камеры...
+                </div>
+                {/* Target frame decoration */}
+                <div className="absolute inset-x-12 inset-y-12 border-2 border-emerald-500/40 rounded-2xl pointer-events-none animate-pulse flex items-center justify-center">
+                  <div className="w-4 h-4 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
+                  <div className="w-4 h-4 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
+                  <div className="w-4 h-4 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
+                  <div className="w-4 h-4 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
+                </div>
+              </div>
+
+              {/* Image Upload Trigger */}
+              <div className="flex flex-col gap-2">
+                <span className="text-[10px] text-gray-400 text-center uppercase font-bold tracking-wide">
+                  Или выберите скриншот QR-кода
+                </span>
+                <label className="w-full py-2.5 bg-slate-900 border border-white/5 hover:border-[#e67e22]/20 text-white font-black text-[10px] uppercase tracking-wider rounded-xl text-center cursor-pointer transition-all">
+                  📂 Выбрать скриншот
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleQrImageUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hidden QR Dummy container for image scanner library */}
+        <div id="qr-reader-dummy" className="hidden" />
 
         {/* Toast notifications container */}
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-[4000] max-w-xs w-full pointer-events-none px-4">
@@ -9766,6 +9877,63 @@ export default function App() {
           ))}
         </AnimatePresence>
       </div>
+
+      {/* GLOBAL SCAN MODAL */}
+      {isScanModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[5000] flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-white/10 w-full max-w-sm rounded-3xl p-5 flex flex-col gap-4 relative shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center border-b border-white/5 pb-2">
+              <span className="text-xs font-black uppercase tracking-wider text-white">
+                Сканировать QR-код
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsScanModalOpen(false)}
+                className="text-gray-500 hover:text-white bg-transparent border-none cursor-pointer text-base font-bold outline-none"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Camera Scanner Viewport */}
+            <div className="relative">
+              <div
+                ref={qrReaderRefCallback}
+                id="qr-reader"
+                className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500"
+              >
+                Запуск камеры...
+              </div>
+              {/* Target frame decoration */}
+              <div className="absolute inset-x-12 inset-y-12 border-2 border-emerald-500/40 rounded-2xl pointer-events-none animate-pulse flex items-center justify-center">
+                <div className="w-4 h-4 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0" />
+                <div className="w-4 h-4 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0" />
+                <div className="w-4 h-4 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0" />
+                <div className="w-4 h-4 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0" />
+              </div>
+            </div>
+
+            {/* Image Upload Trigger */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] text-gray-400 text-center uppercase font-bold tracking-wide">
+                Или выберите скриншот QR-кода
+              </span>
+              <label className="w-full py-2.5 bg-slate-900 border border-white/5 hover:border-[#e67e22]/20 text-white font-black text-[10px] uppercase tracking-wider rounded-xl text-center cursor-pointer transition-all">
+                📂 Выбрать скриншот
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleQrImageUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden QR Dummy container for image scanner library */}
+      <div id="qr-reader-dummy" className="hidden" />
     </div>
   );
 }
