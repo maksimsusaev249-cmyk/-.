@@ -16,10 +16,18 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
   const shouldSendRef = useRef<boolean>(false);
+  const onSendRef = useRef(onSend);
+  const onCancelRef = useRef(onCancel);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+    onCancelRef.current = onCancel;
+  }, [onSend, onCancel]);
 
   const startRecording = useCallback(() => {
     try {
       console.log("Starting voice recording...");
+      console.log("Stream tracks:", stream.getTracks().map(t => t.label));
       audioChunksRef.current = [];
       setRecordingTime(0);
       startTimeRef.current = Date.now();
@@ -47,7 +55,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
           const base64data = reader.result as string;
           console.log("Base64 data length:", base64data.length);
           if (shouldSendRef.current) {
-            onSend(base64data, exactDurationSeconds);
+            onSendRef.current(base64data, exactDurationSeconds);
           }
         };
 
@@ -61,7 +69,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
         console.error("MediaRecorder error:", event);
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(1000);
       setIsRecording(true);
       console.log("MediaRecorder started");
 
@@ -70,20 +78,21 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
       }, 1000);
     } catch (err) {
       console.error("Failed to start voice recording:", err);
-      if (onCancel) onCancel();
+      if (onCancelRef.current) onCancelRef.current();
     }
-  }, [onSend, onCancel, stream]);
+  }, [stream]); // Intentionally omitting onSend and onCancel to prevent re-renders
 
   useEffect(() => {
     startRecording();
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         mediaRecorderRef.current.stop();
       }
       stream.getTracks().forEach((track) => track.stop());
     };
-  }, [startRecording, stream]);
+  }, [stream]); // Only re-run if stream changes
+
 
   const cancelRecording = () => {
     shouldSendRef.current = false;
@@ -95,7 +104,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    if (onCancel) onCancel();
+    if (onCancelRef.current) onCancelRef.current();
   };
 
   const sendRecording = () => {

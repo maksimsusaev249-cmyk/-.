@@ -749,6 +749,8 @@ export default function App() {
   const [viewingProfile, setViewingProfile] = useState<Player | null>(null);
   const [isSocialOpen, setIsSocialOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedMicId, setSelectedMicId] = useState<string>(() => safeGetItem("selectedMicId") || "");
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [isShopOpen, setIsShopOpen] = useState(false);
   const [isWhitelistedRejected, setIsWhitelistedRejected] = useState(false);
   const [clanWarAttacksLeft, setClanWarAttacksLeft] = useState<number>(2);
@@ -1238,6 +1240,27 @@ export default function App() {
     }, 6000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    async function fetchDevices() {
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const audioInputs = devices.filter(device => device.kind === 'audioinput');
+          setMicDevices(audioInputs);
+          if (audioInputs.length > 0 && !selectedMicId) {
+            setSelectedMicId(audioInputs[0].deviceId);
+            safeSetItem("selectedMicId", audioInputs[0].deviceId);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching media devices", err);
+      }
+    }
+    if (activeMainTab === "settings") {
+      fetchDevices();
+    }
+  }, [activeMainTab, selectedMicId]);
 
   // --- MULTIPLAYER WEBSOCKET CONNECTIVITY ---
   useEffect(() => {
@@ -4508,7 +4531,8 @@ export default function App() {
                       addToast("🎤 В этом браузере не поддерживается запись голоса");
                       return;
                     }
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const constraints = selectedMicId ? { audio: { deviceId: { exact: selectedMicId } } } : { audio: true };
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setActiveVoiceStream(stream);
                       } catch (err: any) {
                     console.error("Failed to access microphone", err);
@@ -6335,7 +6359,8 @@ export default function App() {
                                 addToast("🎤 В этом браузере не поддерживается запись голоса");
                                 return;
                               }
-                              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                              const constraints = selectedMicId ? { audio: { deviceId: { exact: selectedMicId } } } : { audio: true };
+                              const stream = await navigator.mediaDevices.getUserMedia(constraints);
                               setActiveFriendVoiceStream(stream);
                             } catch (err: any) {
                               console.error("Failed to access microphone", err);
@@ -7391,6 +7416,60 @@ export default function App() {
                     <div className="w-8 h-4.5 bg-slate-800 rounded-full peer peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:after:translate-x-3.5"></div>
                   </label>
               </div>
+
+              {/* Microphone Settings */}
+              <div className="flex flex-col gap-2 bg-black/30 px-3 py-2 rounded-xl border border-white/5 animate-fade-in">
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-[#aab3c4]">Микрофон</span>
+                      <span className="text-[9px] font-mono font-black mt-0.5 text-gray-400">
+                        {micDevices.length > 0 ? "Выберите устройство" : "Нажмите для проверки доступа"}
+                      </span>
+                    </div>
+                    {micDevices.length === 0 && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            stream.getTracks().forEach(track => track.stop());
+                            addToast("✅ Доступ к микрофону получен!");
+                            if (navigator.mediaDevices.enumerateDevices) {
+                              const devices = await navigator.mediaDevices.enumerateDevices();
+                              const audioInputs = devices.filter(device => device.kind === 'audioinput');
+                              setMicDevices(audioInputs);
+                              if (audioInputs.length > 0 && !selectedMicId) {
+                                setSelectedMicId(audioInputs[0].deviceId);
+                                safeSetItem("selectedMicId", audioInputs[0].deviceId);
+                              }
+                            }
+                          } catch (err) {
+                            console.error("Microphone access failed", err);
+                            addToast("❌ Нет доступа к микрофону. Проверьте настройки браузера.");
+                          }
+                        }}
+                        className="py-1 px-3 bg-slate-700 hover:bg-slate-600 transition-colors text-[10px] font-black rounded-lg text-white"
+                      >
+                        Разрешить
+                      </button>
+                    )}
+                  </div>
+                  {micDevices.length > 0 && (
+                    <select
+                      value={selectedMicId}
+                      onChange={(e) => {
+                        setSelectedMicId(e.target.value);
+                        safeSetItem("selectedMicId", e.target.value);
+                      }}
+                      className="w-full bg-slate-800/80 border border-slate-700 rounded-lg px-2 py-1.5 text-[10px] font-bold text-slate-300 outline-none focus:border-indigo-500/50 transition-colors"
+                    >
+                      {micDevices.map((device, idx) => (
+                        <option key={device.deviceId || idx} value={device.deviceId}>
+                          {device.label || `Микрофон ${idx + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+              </div>
               
               <div className="grid grid-cols-2 gap-2 mt-0.5">
 
@@ -7922,34 +8001,67 @@ export default function App() {
         }}
       >
         {/* Glow ambient effects */}
-        <div className="absolute top-[-20%] right-[-10%] w-[500px] h-[500px] bg-amber-500/5 rounded-full blur-[120px] animate-pulse"></div>
-        <div className="absolute bottom-[-20%] left-[-10%] w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2.5s' }}></div>
+        <div className="absolute top-[-20%] right-[-10%] w-[500px] h-[500px] bg-amber-500/10 rounded-full blur-[120px] animate-pulse [animation-duration:3s]"></div>
+        <div className="absolute bottom-[-20%] left-[-10%] w-[500px] h-[500px] bg-indigo-500/10 rounded-full blur-[120px] animate-pulse [animation-duration:4s]" style={{ animationDelay: '1s' }}></div>
+
+        {/* Ambient magical dust */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {[...Array(15)].map((_, i) => (
+            <motion.div
+              key={i}
+              className="absolute w-1.5 h-1.5 bg-amber-500/40 rounded-full blur-[1px]"
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: `${Math.random() * 100}%`,
+              }}
+              animate={{
+                y: [0, -60],
+                opacity: [0, 0.8, 0],
+                scale: [0.5, 1.5, 0.5]
+              }}
+              transition={{
+                duration: Math.random() * 2 + 2,
+                repeat: Infinity,
+                ease: "easeInOut",
+                delay: Math.random() * 2
+              }}
+            />
+          ))}
+        </div>
 
         <motion.div 
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
+          transition={{ type: "spring", bounce: 0.3 }}
           className="flex flex-col items-center gap-6 relative z-10 max-w-sm text-center"
         >
           {/* Animated Loader Graphic */}
-          <div className="relative w-24 h-24 flex items-center justify-center mb-2">
-            <div className="absolute inset-0 rounded-3xl bg-gradient-to-tr from-amber-500 to-amber-300 animate-spin opacity-20 blur-sm [animation-duration:3s]"></div>
-            <div className="absolute inset-1.5 rounded-2xl border-2 border-dashed border-amber-500/40 animate-spin [animation-duration:12s]"></div>
-            <div className="text-3xl">⚔️</div>
+          <div className="relative w-32 h-32 flex items-center justify-center mb-2">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-t from-amber-500 to-transparent animate-spin opacity-20 blur-md [animation-duration:2s]"></div>
+            <div className="absolute inset-2 rounded-full border-4 border-dashed border-amber-500/40 animate-spin [animation-duration:8s]" style={{ animationDirection: 'reverse' }}></div>
+            
+            <motion.div 
+              animate={{ y: [-8, 8, -8], rotate: [0, 5, -5, 0] }} 
+              transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+              className="text-6xl z-10 filter drop-shadow-[0_0_15px_rgba(245,158,11,0.5)]"
+            >
+              ⚔️
+            </motion.div>
           </div>
 
           <div className="flex flex-col items-center gap-2">
             <h1 className="text-2xl font-black uppercase text-amber-500 tracking-tight">Клик Клан</h1>
-            <p className="text-[10px] text-amber-400 font-mono tracking-[0.25em] uppercase font-bold animate-pulse">
-              {vkInitStatus === "initializing" ? "Авторизация через VK..." : "Проверка авторизации..."}
+            <p className="text-[10px] text-amber-400 font-mono tracking-[0.25em] uppercase font-bold animate-pulse [animation-duration:1s]">
+              {vkInitStatus === "initializing" ? "Связь с сервером..." : "Загрузка мира..."}
             </p>
           </div>
 
-          <div className="w-40 h-1 bg-white/5 rounded-full overflow-hidden mt-2 border border-white/[0.02] relative">
+          <div className="w-40 h-1.5 bg-white/5 rounded-full overflow-hidden mt-2 border border-white/[0.02] relative">
             <motion.div 
               className="absolute left-0 top-0 bottom-0 bg-gradient-to-r from-amber-500 to-yellow-400 rounded-full"
               initial={{ width: "10%" }}
-              animate={{ width: "90%" }}
-              transition={{ repeat: Infinity, repeatType: "reverse", duration: 1.5, ease: "easeInOut" }}
+              animate={{ width: "100%" }}
+              transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
             />
           </div>
         </motion.div>
