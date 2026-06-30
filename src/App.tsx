@@ -762,6 +762,7 @@ export default function App() {
   const [isSubmittingReferral, setIsSubmittingReferral] = useState(false);
   const [myReferrer, setMyReferrer] = useState<string | null>(null);
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const [isInviteOptionsOpen, setIsInviteOptionsOpen] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [showClanQrModal, setShowClanQrModal] = useState<string | null>(null);
@@ -2800,6 +2801,7 @@ export default function App() {
   const qrReaderRefCallback = useCallback((node: HTMLDivElement | null) => {
     if (node) {
       try {
+        setCameraError(null);
         const scanner = new Html5Qrcode(node.id);
         html5QrCodeRef.current = scanner;
         scanner.start(
@@ -2814,10 +2816,18 @@ export default function App() {
           () => {}
         ).catch(err => {
           console.error("Camera start error:", err);
-          addToast("⚠️ Камера недоступна. Выберите файл-скриншот или введите код вручную!");
+          let errorMsg = "⚠️ Камера недоступна.";
+          if (err?.name === "NotAllowedError" || String(err).includes("NotAllowedError") || String(err).includes("Permission denied") || String(err).includes("dismissed")) {
+            errorMsg = "❌ Доступ к камере отклонен или заблокирован в браузере. Пожалуйста, загрузите скриншот QR-кода ниже.";
+          } else {
+            errorMsg = `⚠️ Ошибка камеры: ${err?.message || err || "неизвестная ошибка"}`;
+          }
+          setCameraError(errorMsg);
+          addToast(errorMsg);
         });
       } catch (e) {
         console.error("Scanner initialization error:", e);
+        setCameraError("⚠️ Не удалось инициализировать сканер.");
       }
     } else {
       if (html5QrCodeRef.current) {
@@ -8523,9 +8533,15 @@ export default function App() {
                 <div
                   ref={qrReaderRefCallback}
                   id="qr-reader"
-                  className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500"
+                  className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500 p-4"
                 >
-                  Запуск камеры...
+                  {cameraError ? (
+                    <span className="text-red-400 font-medium leading-relaxed max-w-[240px]">
+                      {cameraError}
+                    </span>
+                  ) : (
+                    "Запуск камеры..."
+                  )}
                 </div>
                 {/* Target frame decoration */}
                 <div className="absolute inset-x-12 inset-y-12 border-2 border-emerald-500/40 rounded-2xl pointer-events-none animate-pulse flex items-center justify-center">
@@ -9900,9 +9916,15 @@ export default function App() {
               <div
                 ref={qrReaderRefCallback}
                 id="qr-reader"
-                className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500"
+                className="w-full h-64 bg-black rounded-2xl overflow-hidden relative border border-white/5 flex items-center justify-center text-center text-xs text-gray-500 p-4"
               >
-                Запуск камеры...
+                {cameraError ? (
+                  <span className="text-red-400 font-medium leading-relaxed max-w-[240px]">
+                    {cameraError}
+                  </span>
+                ) : (
+                  "Запуск камеры..."
+                )}
               </div>
               {/* Target frame decoration */}
               <div className="absolute inset-x-12 inset-y-12 border-2 border-emerald-500/40 rounded-2xl pointer-events-none animate-pulse flex items-center justify-center">
