@@ -1267,6 +1267,20 @@ wss.on("connection", (ws: WebSocket) => {
           ws.send(JSON.stringify({ type: "pong" }));
           break;
         }
+
+        case "register_admin_code": {
+          const { code, playerId } = event.data || {};
+          if (code && playerId) {
+            adminVerificationCodes.set(String(code).trim(), String(playerId).trim());
+            // Expire code after 5 minutes
+            setTimeout(() => {
+              if (adminVerificationCodes.get(String(code).trim()) === String(playerId).trim()) {
+                adminVerificationCodes.delete(String(code).trim());
+              }
+            }, 5 * 60 * 1000);
+          }
+          break;
+        }
       }
     } catch (err) {
       console.error("Failed to parse websocket message:", err);
@@ -1321,6 +1335,8 @@ let whitelistEnabled: boolean = true;
 let whitelistCodes: string[] = ["777777", "123456", "000000", "111111", "999999", "666666", "222222", "333333"];
 let voiceStartHour = 22;
 let voiceEndHour = 7;
+
+const adminVerificationCodes = new Map<string, string>();
 
 function isHourInInterval(hour: number, start: number, end: number) {
   if (start <= end) {
@@ -2284,11 +2300,35 @@ async function startTelegramBotPolling() {
               } else {
                 await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не подключена администратором.");
               }
-            } else if (mappedText.toLowerCase() === "/mod_panel" || mappedText.toLowerCase() === "/mod") {
+            } else if (mappedText.toLowerCase().startsWith("/mod_panel") || mappedText.toLowerCase().startsWith("/mod")) {
               const senderId = String(from.id);
               if (moderators.includes(senderId) || admins.includes(senderId)) {
-                const msg = `🛠️ *Панель модератора*\n\nВаш ключ подтверждения сгенерирован.\n\nПароль от консоли в игре:\n🔑 \`admin123\`\n\nИспользуйте его в игре для входа в панель управления.`;
-                await sendCleanBotMessage(chatId, msg, { parse_mode: "Markdown" });
+                const code = mappedText.split(" ")[1]?.trim();
+                if (code) {
+                  const targetPlayerId = adminVerificationCodes.get(code);
+                  if (targetPlayerId) {
+                    const isSenderAdmin = admins.includes(senderId);
+                    if (isSenderAdmin) {
+                      if (!admins.includes(targetPlayerId)) {
+                        admins.push(targetPlayerId);
+                      }
+                    } else {
+                      if (!moderators.includes(targetPlayerId)) {
+                        moderators.push(targetPlayerId);
+                      }
+                    }
+                    saveConfig();
+                    broadcastPlayers();
+                    
+                    const roleName = isSenderAdmin ? "Администратора" : "Модератора";
+                    const msg = `🛡️ *Авторизация успешна*\n\nВаше игровое устройство (ID: \`${targetPlayerId}\`) успешно авторизовано в системе с правами *${roleName}*!\n\nПароль от консоли в игре:\n🔑 \`admin123\`\n\nИспользуйте его для входа.`;
+                    await sendCleanBotMessage(chatId, msg, { parse_mode: "Markdown" });
+                  } else {
+                    await sendCleanBotMessage(chatId, `⚠️ Код \`${code}\` не найден или устарел. Пожалуйста, откройте окно входа в игре заново, чтобы получить свежий код.`, { parse_mode: "Markdown" });
+                  }
+                } else {
+                  await sendCleanBotMessage(chatId, "⚠️ Пожалуйста, укажите код подтверждения из игры. Пример: `/mod 123456`", { parse_mode: "Markdown" });
+                }
               } else {
                 await sendCleanBotMessage(chatId, "❌ Эта команда доступна только модераторам!");
               }

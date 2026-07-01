@@ -886,6 +886,7 @@ export default function App() {
   // Admin state
   const [isAdminConsoleOpen, setIsAdminConsoleOpen] = useState(false);
   const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState(false);
+  const [adminVerificationCode, setAdminVerificationCode] = useState("");
   const [adminCode, setAdminCode] = useState("");
 
   // Custom UI Confirmation modal to replace blocked window.confirm inside iframes
@@ -1956,7 +1957,26 @@ export default function App() {
     if (!text) return;
     
     // Command interception (Bot Command)
-    if (text.toLowerCase() === "/уведомления" || text.toLowerCase() === "/notifications") {
+    if (text.toLowerCase() === "/mods" || text.toLowerCase() === "/модеры") {
+      setChatMessageText("");
+      setGlobalChatHistory(prev => {
+        const modsOnline = onlinePlayers.filter(p => p.isModerator).map(p => p.name).join(", ");
+        const adminsOnline = onlinePlayers.filter(p => p.isAdmin).map(p => p.name).join(", ");
+        
+        const botMsg: ChatMessage = {
+          id: "bot_cmd_" + Date.now(),
+          playerId: "SYSTEM_BOT",
+          playerName: "🤖 Бот (Система)",
+          clan: null,
+          text: `Список персонала онлайн:\n👑 Администраторы: ${adminsOnline || "Нет в сети"}\n🛡️ Модераторы: ${modsOnline || "Нет в сети"}`,
+          timestamp: formatMoscowTime(undefined, false),
+          color: "#A0ABC0",
+          isClanOnly: false
+        };
+        return [...prev, botMsg].slice(-50);
+      });
+      return;
+    } else if (text.toLowerCase() === "/уведомления" || text.toLowerCase() === "/notifications") {
       setChatMessageText("");
       setGlobalChatHistory(prev => {
         const botMsg: ChatMessage = {
@@ -1984,6 +2004,7 @@ export default function App() {
           clan: null,
           text: `Доступные команды бота:
 • /уведомления (или /notifications) - посмотреть информацию о личных сообщениях.
+• /mods (или /модеры) - список персонала онлайн.
 • /помощь (или /help) - список команд.`,
           timestamp: formatMoscowTime(undefined, false),
           color: "#A0ABC0",
@@ -4515,7 +4536,7 @@ export default function App() {
                         className="font-semibold cursor-pointer hover:underline flex items-center gap-1 truncate max-w-[130px]"
                         onClick={() => handleViewChatPlayerProfile(m.playerId, m.playerName)}
                       >
-                        {m.playerName} {onlinePlayers.find(p => p.id === m.playerId)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === m.playerId)?.isModerator ? "🛠️" : ""}
+                        {m.playerName} {onlinePlayers.find(p => p.id === m.playerId)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === m.playerId)?.isModerator ? "🛡️" : ""}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
                       {isPrivileged && (
@@ -4586,7 +4607,7 @@ export default function App() {
                           }
                         }}
                       >
-                        {m.playerName} {onlinePlayers.find(p => p.id === m.playerId)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === m.playerId)?.isModerator ? "🛠️" : ""}
+                        {m.playerName} {onlinePlayers.find(p => p.id === m.playerId)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === m.playerId)?.isModerator ? "🛡️" : ""}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
                       {isPrivileged && (
@@ -5910,7 +5931,7 @@ export default function App() {
                               </div>
                               <div className="flex flex-col min-w-0">
                                 <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5 shrink-0">
-                                  {p.name} {p.isAdmin ? "👑" : p.isModerator ? "🛠️" : ""}
+                                  {p.name} {p.isAdmin ? "👑" : p.isModerator ? "🛡️" : ""}
                                   <span className={`w-2 h-2 rounded-full ${p.isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-gray-500"} shrink-0`} title={p.isOnline ? "Онлайн" : "Офлайн"}></span>
                                 </span>
                                 <span className="text-[10px] text-[#aab3c4] mt-0.5 font-mono truncate">
@@ -5986,7 +6007,7 @@ export default function App() {
                                 </div>
                                 <div className="flex flex-col min-w-0">
                                   <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5 shrink-0">
-                                    {p.name} {p.isAdmin ? "👑" : p.isModerator ? "🛠️" : ""}
+                                    {p.name} {p.isAdmin ? "👑" : p.isModerator ? "🛡️" : ""}
                                     <span className={`w-2 h-2 rounded-full ${p.isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-gray-500"} shrink-0`} title={p.isOnline ? "Онлайн" : "Офлайн"}></span>
                                   </span>
                                   <span className="text-[10px] text-[#aab3c4] mt-0.5 font-mono truncate">
@@ -6393,7 +6414,7 @@ export default function App() {
                           ) : (
                             members.map((m) => (
                               <div key={m.id} className="flex justify-between items-center text-gray-300 py-1 font-mono text-[11px]">
-                                <span className="font-sans font-bold flex items-center gap-1">👤 {m.name} {m.isAdmin ? "👑" : m.isModerator ? "🛠️" : ""} {m.id === effectivePlayerId ? "(Вы)" : ""}</span>
+                                <span className="font-sans font-bold flex items-center gap-1">👤 {m.name} {m.isAdmin ? "👑" : m.isModerator ? "🛡️" : ""} {m.id === effectivePlayerId ? "(Вы)" : ""}</span>
                                 <span className="text-[#ffbc6e] font-semibold">{Math.floor(m.coins).toLocaleString()} 💰</span>
                               </div>
                             ))
@@ -7509,7 +7530,7 @@ export default function App() {
                         {(player.name || "Игрок").charAt(0).toUpperCase()}
                       </div>
                       <span className="text-[11px] font-bold truncate max-w-[120px]" style={{ color: player.color }}>
-                        {player.name || "Игрок"} {onlinePlayers.find(p => p.id === player.id)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === player.id)?.isModerator ? "🛠️" : rank === 1 ? "👑" : ""}
+                        {player.name || "Игрок"} {onlinePlayers.find(p => p.id === player.id)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === player.id)?.isModerator ? "🛡️" : rank === 1 ? "👑" : ""}
                       </span>
                     </div>
                     <span className="text-[10px] font-mono text-cyan-400 font-bold">
@@ -7956,7 +7977,17 @@ export default function App() {
             <div className="flex justify-center mt-4 pb-2">
               <button 
                 type="button"
-                onClick={() => setIsAdminLoginModalOpen(true)}
+                onClick={() => {
+                  const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+                  setAdminVerificationCode(newCode);
+                  if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                    socketRef.current.send(JSON.stringify({
+                      type: "register_admin_code",
+                      data: { code: newCode, playerId: effectivePlayerId }
+                    }));
+                  }
+                  setIsAdminLoginModalOpen(true);
+                }}
                 className="text-[10px] text-gray-600 hover:text-amber-500 transition-colors uppercase tracking-[0.2em] font-black cursor-pointer border-none bg-transparent"
               >
                 ⚙️ Войти в Панель Админа
@@ -8598,7 +8629,17 @@ export default function App() {
 
             <button 
               type="button"
-              onClick={() => setIsAdminLoginModalOpen(true)}
+              onClick={() => {
+                const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+                setAdminVerificationCode(newCode);
+                if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                  socketRef.current.send(JSON.stringify({
+                    type: "register_admin_code",
+                    data: { code: newCode, playerId: effectivePlayerId }
+                  }));
+                }
+                setIsAdminLoginModalOpen(true);
+              }}
               className="text-[9px] text-gray-700 hover:text-amber-500 transition-colors uppercase tracking-[0.3em] font-black cursor-pointer border-none bg-transparent mt-2"
             >
               Admin Panel
@@ -8616,7 +8657,14 @@ export default function App() {
               className="w-full max-w-sm bg-[#162239] border border-amber-500/30 rounded-2xl p-6 shadow-2xl relative flex flex-col gap-4 text-white"
             >
               <h3 className="text-sm font-black uppercase text-amber-500 text-center tracking-widest">Доступ Администратора</h3>
-              <p className="text-[10px] text-gray-400 text-center uppercase tracking-widest">Введите секретный код</p>
+              
+              <div className="text-center mb-4 mt-2">
+                <p className="text-gray-400 text-[10px] mb-2 uppercase tracking-wider">Для получения пароля отправьте боту код:</p>
+                <div className="bg-slate-950 p-2 rounded-lg font-mono text-amber-500 font-bold select-all text-sm border border-slate-700">
+                  /mod {adminVerificationCode}
+                </div>
+              </div>
+
               <input 
                 type="password"
                 value={adminCode}
@@ -8634,20 +8682,15 @@ export default function App() {
                 </button>
                 <button 
                   onClick={() => {
-                    if (adminCode === "admin123") {
-                      if (isGlobalPrivileged) {
-                        setIsAdminLoginModalOpen(false);
-                        setIsAdminConsoleOpen(true);
-                        setAdminCode("");
-                      } else {
-                        addToast("У вас нет прав доступа (требуется Модератор или Администратор).");
-                        setAdminCode("");
-                      }
-                    } else {
-                      addToast("Неверный код доступа!");
-                      setAdminCode("");
-                    }
-                  }}
+                   if (adminCode === "admin123") {
+                     setIsAdminLoginModalOpen(false);
+                     setIsAdminConsoleOpen(true);
+                     setAdminCode("");
+                   } else {
+                     addToast("Неверный код доступа!");
+                     setAdminCode("");
+                   }
+                 }}
                   className="flex-1 py-3 text-xs bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl cursor-pointer"
                 >
                   Войти
@@ -10053,7 +10096,14 @@ export default function App() {
             className="w-full max-w-sm bg-[#162239] border border-amber-500/30 rounded-2xl p-6 shadow-2xl relative flex flex-col gap-4 text-white"
           >
             <h3 className="text-sm font-black uppercase text-amber-500 text-center tracking-widest">Доступ Администратора</h3>
-            <p className="text-[10px] text-gray-400 text-center uppercase tracking-widest">Введите секретный код</p>
+            
+            <div className="text-center mb-4 mt-2">
+              <p className="text-gray-400 text-[10px] mb-2 uppercase tracking-wider">Для получения пароля отправьте боту код:</p>
+              <div className="bg-slate-950 p-2 rounded-lg font-mono text-amber-500 font-bold select-all text-sm border border-slate-700">
+                /mod {adminVerificationCode}
+              </div>
+            </div>
+
             <input 
               type="password"
               value={adminCode}
@@ -10072,14 +10122,9 @@ export default function App() {
               <button 
                 onClick={() => {
                   if (adminCode === "admin123") {
-                    if (isGlobalPrivileged) {
-                      setIsAdminLoginModalOpen(false);
-                      setIsAdminConsoleOpen(true);
-                      setAdminCode("");
-                    } else {
-                      addToast("У вас нет прав доступа (требуется Модератор или Администратор).");
-                      setAdminCode("");
-                    }
+                    setIsAdminLoginModalOpen(false);
+                    setIsAdminConsoleOpen(true);
+                    setAdminCode("");
                   } else {
                     addToast("Неверный код доступа!");
                     setAdminCode("");
