@@ -920,6 +920,25 @@ export default function App() {
     return saved ? Number(saved) : 1;
   });
 
+  const [lastDailyBonusClaimedAt, setLastDailyBonusClaimedAt] = useState<number>(() => {
+    try {
+      const saved = safeGetItem("gameLastDailyBonusClaimedAtV1");
+      return saved ? Number(saved) : 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const [dailyBonusRewardResult, setDailyBonusRewardResult] = useState<{
+    type: "coins" | "item";
+    text: string;
+    item: any;
+  } | null>(null);
+
+  useEffect(() => {
+    safeSetItem("gameLastDailyBonusClaimedAtV1", String(lastDailyBonusClaimedAt));
+  }, [lastDailyBonusClaimedAt]);
+
   const REWARD_DEFINITIONS = [
     { level: 2, title: "🪵 Простой Клик-Посох", desc: "Деревянный посох, наделенный слабой искрой силы. Можно выгодно продать на рынке лобби!", img: "sword", category: "weapons" },
     { level: 3, title: "🧪 Малое Зелье Бодрости", desc: "Быстро восстанавливает энергию кликера. Крайне востребовано среди новичков!", img: "potion", category: "potions" },
@@ -2268,6 +2287,9 @@ export default function App() {
             if (data.levelItems && Array.isArray(data.levelItems)) {
               setLevelItems(data.levelItems);
             }
+            if (typeof data.lastDailyBonusClaimedAt === "number") {
+              setLastDailyBonusClaimedAt(data.lastDailyBonusClaimedAt);
+            }
             if (typeof data.playerClan === "string" || data.playerClan === null) setPlayerClan(data.playerClan);
             if (data.currentQuest) setCurrentQuest(data.currentQuest);
             if (typeof data.notificationsEnabled === "boolean") {
@@ -2603,6 +2625,7 @@ export default function App() {
         currentQuest,
         rubles,
         notificationsEnabled,
+        lastDailyBonusClaimedAt,
         friendsCount: friendsList.length,
         friends: friendsList,
         lastActiveTimestamp: Date.now() + timeOffsetRef.current,
@@ -2708,6 +2731,106 @@ export default function App() {
       unsubReferrals();
     };
   }, [currentUser]);
+
+  const handleClaimDailyBonus = async () => {
+    if (!currentUser) {
+      addToast("⚠️ Войдите в аккаунт, чтобы получать ежедневные бонусы!");
+      return;
+    }
+
+    const now = Date.now() + timeOffsetRef.current;
+    const nextAvailableTime = lastDailyBonusClaimedAt + 24 * 60 * 60 * 1000;
+    if (now < nextAvailableTime) {
+      const remainingMs = nextAvailableTime - now;
+      const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+      const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+      const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+      addToast(`⚠️ Бонус еще не готов! Подождите еще ${hours}ч ${minutes}м ${seconds}с ⏳`);
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      // Reward selection: 80% coins, 20% rare item
+      const isItem = Math.random() < 0.20;
+      let rewardText = "";
+      let newCoins = coins;
+      let updatedItems = [...levelItems];
+
+      if (isItem) {
+        const rareItemsPool = [
+          {
+            title: "🗡️ Легендарная Клик-Сабля",
+            desc: "Древний сверкающий клинок, благословленный великими тапальщиками. Дарует невероятную удачу!",
+            img: "sword",
+            category: "weapons"
+          },
+          {
+            title: "🧪 Настой Великого Мастера",
+            desc: "Концентрированная эссенция бесконечной бодрости. Восстанавливает божественные запасы сил!",
+            img: "potion",
+            category: "potions"
+          },
+          {
+            title: "🛡️ Эгида Бессмертных",
+            desc: "Легендарный космический щит из глубин вселенной. Искрится чистой астральной энергией!",
+            img: "shield",
+            category: "weapons"
+          },
+          {
+            title: "👑 Корона Создателя",
+            desc: "Исключительное произведение ювелирного искусства. Сияет чистым космическим золотом!",
+            img: "custom",
+            customImg: "https://images.unsplash.com/photo-1590579491410-a434785fe334?w=120&auto=format&fit=crop&q=60&ixlib=rb-4.0.3",
+            category: "custom"
+          }
+        ];
+
+        const randomItem = rareItemsPool[Math.floor(Math.random() * rareItemsPool.length)];
+        const newItem = {
+          id: `daily-bonus-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+          ...randomItem,
+          category: randomItem.category
+        };
+
+        updatedItems = [...levelItems, newItem];
+        setLevelItems(updatedItems);
+        rewardText = `редкий предмет "${randomItem.title}"!`;
+      } else {
+        const coinsReward = Math.floor(Math.random() * 9001) + 1000;
+        newCoins = coins + coinsReward;
+        setCoins(newCoins);
+        rewardText = `${coinsReward.toLocaleString()} монет 💰`;
+      }
+
+      const claimTime = Date.now() + timeOffsetRef.current;
+      setLastDailyBonusClaimedAt(claimTime);
+
+      const userRef = doc(db, "users", currentUser.uid);
+      await setDoc(userRef, {
+        coins: newCoins,
+        levelItems: updatedItems,
+        lastDailyBonusClaimedAt: claimTime,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      playPurchaseSound();
+      
+      setDailyBonusRewardResult({
+        type: isItem ? "item" : "coins",
+        text: rewardText,
+        item: isItem ? updatedItems[updatedItems.length - 1] : null
+      });
+
+      addToast(`🎉 Вы успешно получили ежедневный бонус: ${rewardText}`);
+      logUserAction(`Получил ежедневный бонус за вход: ${rewardText}`, newCoins);
+    } catch (e) {
+      console.error("Failed to claim daily bonus:", e);
+      addToast("❌ Ошибка при получении бонуса. Попробуйте снова.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const handleApplyReferrer = async (referrerId: string) => {
     if (!currentUser) {
@@ -7713,10 +7836,30 @@ export default function App() {
                         {currentUser.email?.startsWith("tg_") ? "TG" : (currentUser.displayName?.charAt(0) || "G")}
                       </div>
                     )}
-                    <div className="flex flex-col min-w-0 flex-1">
+                    <div className="flex flex-col min-w-0 flex-1 text-left">
                       <span className="text-xs font-black text-amber-300 truncate leading-tight">
                         {currentUser.displayName || (currentUser.email?.startsWith("tg_") ? "Чат-Игрок" : "Google Игрок")}
                       </span>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        {linkedTelegramId && (
+                          <span className="text-[10px] text-[#aab3c4] font-mono bg-black/40 px-1.5 py-0.5 rounded border border-white/5 font-bold">
+                            TG ID: {linkedTelegramId}
+                          </span>
+                        )}
+                        {isGlobalAdmin ? (
+                          <span className="bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 font-black text-[9px] uppercase tracking-wider px-2 py-0.5 rounded shadow-sm">
+                            👑 Админ
+                          </span>
+                        ) : isGlobalModerator ? (
+                          <span className="bg-[#3498db] text-white font-black text-[9px] uppercase tracking-wider px-2 py-0.5 rounded shadow-sm">
+                            🛡️ Модер
+                          </span>
+                        ) : (
+                          <span className="bg-slate-800 text-gray-400 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded">
+                            👤 Игрок
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   
@@ -7973,26 +8116,6 @@ export default function App() {
                 </button>
               </div>
             )}
-
-            <div className="flex justify-center mt-4 pb-2">
-              <button 
-                type="button"
-                onClick={() => {
-                  const newCode = Math.floor(100000 + Math.random() * 900000).toString();
-                  setAdminVerificationCode(newCode);
-                  if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                    socketRef.current.send(JSON.stringify({
-                      type: "register_admin_code",
-                      data: { code: newCode, playerId: effectivePlayerId }
-                    }));
-                  }
-                  setIsAdminLoginModalOpen(true);
-                }}
-                className="text-[10px] text-gray-600 hover:text-amber-500 transition-colors uppercase tracking-[0.2em] font-black cursor-pointer border-none bg-transparent"
-              >
-                ⚙️ Войти в Панель Админа
-              </button>
-            </div>
           </div>
         )}
 
@@ -8627,23 +8750,25 @@ export default function App() {
               </div>
             </div>
 
-            <button 
-              type="button"
-              onClick={() => {
-                const newCode = Math.floor(100000 + Math.random() * 900000).toString();
-                setAdminVerificationCode(newCode);
-                if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                  socketRef.current.send(JSON.stringify({
-                    type: "register_admin_code",
-                    data: { code: newCode, playerId: effectivePlayerId }
-                  }));
-                }
-                setIsAdminLoginModalOpen(true);
-              }}
-              className="text-[9px] text-gray-700 hover:text-amber-500 transition-colors uppercase tracking-[0.3em] font-black cursor-pointer border-none bg-transparent mt-2"
-            >
-              Admin Panel
-            </button>
+            {isGlobalPrivileged && (
+              <button 
+                type="button"
+                onClick={() => {
+                  const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+                  setAdminVerificationCode(newCode);
+                  if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                    socketRef.current.send(JSON.stringify({
+                      type: "register_admin_code",
+                      data: { code: newCode, playerId: effectivePlayerId }
+                    }));
+                  }
+                  setIsAdminLoginModalOpen(true);
+                }}
+                className="text-[9px] text-gray-700 hover:text-amber-500 transition-colors uppercase tracking-[0.3em] font-black cursor-pointer border-none bg-transparent mt-2"
+              >
+                Admin Panel
+              </button>
+            )}
           </motion.div>
         </div>
 
@@ -9065,7 +9190,14 @@ export default function App() {
   const activeTabContentSection = (
     <>
       {activeMainTab === "upgrades" && (
-        <div className={`gap-2.5 ${appVersion === "pc" ? "grid grid-cols-2 lg:grid-cols-3 gap-3 animate-fade-in" : "flex flex-col animate-fade-in"}`}>
+        <div className="flex flex-col animate-fade-in">
+          <DailyBonusWidget 
+            lastDailyBonusClaimedAt={lastDailyBonusClaimedAt}
+            isSyncing={isSyncing}
+            timeOffsetRef={timeOffsetRef}
+            handleClaimDailyBonus={handleClaimDailyBonus}
+          />
+          <div className={`gap-2.5 ${appVersion === "pc" ? "grid grid-cols-2 lg:grid-cols-3 gap-3" : "flex flex-col gap-2.5"}`}>
           {/* Click Upgrade Card */}
           <div className="bg-[#162239] rounded-xl p-2.5 flex justify-between items-center border border-white/5">
             <div className="flex flex-col min-w-0 pr-1">
@@ -9106,6 +9238,7 @@ export default function App() {
             </button>
           </div>
         </div>
+      </div>
       )}
       {activeMainTab === "quests" && renderQuestsContent()}
       {activeMainTab === "chat" && renderChatContent()}
@@ -9409,6 +9542,75 @@ export default function App() {
 
 
 
+
+      {/* Daily Bonus Reward Celebration Modal */}
+      {dailyBonusRewardResult && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-[5000] p-4 text-white select-none">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-[#121c30] border-2 border-amber-500 rounded-[28px] p-6 max-w-sm w-full flex flex-col items-center text-center relative shadow-[0_20px_50px_rgba(230,126,34,0.3)]"
+          >
+            {/* Sparkles / Particles background effect */}
+            <div className="absolute inset-0 overflow-hidden rounded-[26px] pointer-events-none">
+              <div className="absolute top-[-10%] left-[-10%] w-[120%] h-[120%] bg-[radial-gradient(circle_at_center,rgba(230,126,34,0.15)_0%,transparent_60%)] animate-pulse" />
+            </div>
+
+            <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-amber-400 via-amber-500 to-orange-600 flex items-center justify-center shadow-[0_8px_24px_rgba(230,126,34,0.4)] mb-4 shrink-0 relative z-10">
+              <Sparkles className="w-10 h-10 text-white animate-pulse" />
+            </div>
+
+            <h3 className="text-xl font-black text-[#ffd966] uppercase tracking-wide mb-2 relative z-10">
+              Поздравляем! 🎉
+            </h3>
+            
+            <p className="text-xs text-[#aab7c4] mb-4 leading-relaxed relative z-10">
+              Вы успешно забрали свой ежедневный бонус за вход! Ваш подарок:
+            </p>
+
+            {dailyBonusRewardResult.type === "coins" ? (
+              <div className="bg-black/30 border border-white/5 rounded-2xl py-4 px-6 mb-5 flex flex-col items-center gap-1.5 w-full relative z-10">
+                <span className="text-4xl">💰</span>
+                <span className="text-2xl font-black text-amber-400 font-mono">
+                  {dailyBonusRewardResult.text}
+                </span>
+                <span className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
+                  монеты зачислены на баланс
+                </span>
+              </div>
+            ) : (
+              <div className="bg-black/30 border border-white/5 rounded-2xl p-4 mb-5 flex flex-col items-center gap-2 w-full relative z-10">
+                <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-900 border border-white/10 flex items-center justify-center relative">
+                  <img 
+                    src={dailyBonusRewardResult.item.customImg || ITEM_MAP[dailyBonusRewardResult.item.img as keyof typeof ITEM_MAP]} 
+                    alt="item" 
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+                <div className="flex flex-col items-center">
+                  <span className="text-sm font-black text-[#75c6ff] text-center">
+                    {dailyBonusRewardResult.item.title}
+                  </span>
+                  <span className="text-[10px] text-gray-400 text-center leading-normal mt-1 max-w-[240px]">
+                    {dailyBonusRewardResult.item.desc}
+                  </span>
+                </div>
+                <span className="text-[10px] text-emerald-400 uppercase tracking-wide font-black mt-1">
+                  добавлено в снаряжение 🎒
+                </span>
+              </div>
+            )}
+
+            <button
+              onClick={() => setDailyBonusRewardResult(null)}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-[#e67e22] hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black text-xs uppercase tracking-wider transition-all shadow-md border-none outline-none cursor-pointer relative z-10 hover:shadow-[0_4px_12px_rgba(230,126,34,0.3)] active:scale-95 animate-pulse"
+            >
+              Отлично! 🚀
+            </button>
+          </motion.div>
+        </div>
+      )}
 
       {/* Player Profile Dialog */}
       {viewingProfile && (
@@ -10327,3 +10529,71 @@ export default function App() {
     </div>
   );
 }
+
+interface DailyBonusWidgetProps {
+  lastDailyBonusClaimedAt: number;
+  isSyncing: boolean;
+  timeOffsetRef: React.MutableRefObject<number>;
+  handleClaimDailyBonus: () => void;
+}
+
+const DailyBonusWidget = ({ lastDailyBonusClaimedAt, isSyncing, timeOffsetRef, handleClaimDailyBonus }: DailyBonusWidgetProps) => {
+  const [timeLeft, setTimeLeft] = useState<string>("");
+  const [canClaim, setCanClaim] = useState<boolean>(false);
+
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = Date.now() + timeOffsetRef.current;
+      const nextClaim = lastDailyBonusClaimedAt + 24 * 60 * 60 * 1000;
+      if (now >= nextClaim) {
+        setCanClaim(true);
+        setTimeLeft("");
+      } else {
+        setCanClaim(false);
+        const diff = nextClaim - now;
+        const h = Math.floor(diff / (60 * 60 * 1000));
+        const m = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
+        const s = Math.floor((diff % (1000 * 60)) / 1000);
+        setTimeLeft(`${h}ч ${m}м ${s}с`);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [lastDailyBonusClaimedAt]);
+
+  return (
+    <div className="bg-[#121c30]/90 border border-[#e67e22]/30 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-lg select-none mb-3">
+      <div className="flex items-center gap-3.5 w-full sm:w-auto">
+        <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center shadow-[0_4px_12px_rgba(230,126,34,0.3)] animate-pulse shrink-0">
+          <Gift className="w-6 h-6 text-white" />
+        </div>
+        <div className="flex flex-col min-w-0 text-left">
+          <span className="text-sm font-black text-white flex items-center gap-1.5 uppercase tracking-wide">
+            🎁 Ежедневный Бонус
+          </span>
+          <span className="text-xs text-[#aab7c4] mt-0.5 leading-normal">
+            {canClaim 
+              ? "Заберите свой случайный подарок: кучу монет или легендарный предмет!" 
+              : `Следующий бонус будет доступен через ${timeLeft}`
+            }
+          </span>
+        </div>
+      </div>
+
+      <button
+        onClick={handleClaimDailyBonus}
+        disabled={!canClaim || isSyncing}
+        className={`w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md border-none outline-none shrink-0 cursor-pointer ${
+          canClaim && !isSyncing
+            ? "bg-gradient-to-r from-amber-500 to-[#e67e22] hover:from-amber-400 hover:to-orange-500 text-slate-950 hover:shadow-[0_4px_15px_rgba(230,126,34,0.45)] active:scale-95"
+            : "bg-slate-800 text-gray-500 cursor-not-allowed opacity-50"
+        }`}
+      >
+        {isSyncing ? "Синхронизация..." : canClaim ? "Забрать Бонус 🎁" : timeLeft}
+      </button>
+    </div>
+  );
+};
+

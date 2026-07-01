@@ -579,8 +579,8 @@ function getClansPrivacyList() {
 function broadcastPlayers() {
   const playersList = Array.from(players.values()).map(p => ({
     ...p,
-    isAdmin: admins.includes(p.id),
-    isModerator: moderators.includes(p.id)
+    isAdmin: isAdminId(p.id),
+    isModerator: isModeratorId(p.id)
   }));
   broadcast({
     type: "players_update",
@@ -976,7 +976,7 @@ wss.on("connection", (ws: WebSocket) => {
         case "delete_chat_msg": {
           const { playerId, messageId } = event.data;
           const player = players.get(playerId);
-          if (player && (admins.includes(playerId) || moderators.includes(playerId))) {
+          if (player && (isAdminId(playerId) || isModeratorId(playerId))) {
             const payload = JSON.stringify({
               type: "delete_chat_msg_broadcast",
               data: { messageId }
@@ -1338,6 +1338,34 @@ let voiceEndHour = 7;
 
 const adminVerificationCodes = new Map<string, string>();
 
+function isAdminId(id: string | null | undefined): boolean {
+  if (!id) return false;
+  const target = id.toLowerCase().trim();
+  if (admins.some(a => a.toLowerCase().trim() === target)) return true;
+  
+  // Also check if id is a player ID (Firebase UID) with a linked telegramId that matches
+  const p = players.get(id);
+  if (p && p.telegramId) {
+    const tgTarget = String(p.telegramId).toLowerCase().trim();
+    if (admins.some(a => a.toLowerCase().trim() === tgTarget)) return true;
+  }
+  return false;
+}
+
+function isModeratorId(id: string | null | undefined): boolean {
+  if (!id) return false;
+  const target = id.toLowerCase().trim();
+  if (moderators.some(m => m.toLowerCase().trim() === target)) return true;
+
+  // Also check if id is a player ID (Firebase UID) with a linked telegramId that matches
+  const p = players.get(id);
+  if (p && p.telegramId) {
+    const tgTarget = String(p.telegramId).toLowerCase().trim();
+    if (moderators.some(m => m.toLowerCase().trim() === tgTarget)) return true;
+  }
+  return false;
+}
+
 function isHourInInterval(hour: number, start: number, end: number) {
   if (start <= end) {
     return hour >= start && hour < end;
@@ -1499,7 +1527,7 @@ async function saveBotChatState(chatId: number, state: BotChatState) {
 
 function isStaff(chatId: string | number): boolean {
   const sId = String(chatId);
-  return admins.includes(sId) || moderators.includes(sId);
+  return isAdminId(sId) || isModeratorId(sId);
 }
 
 function getKeyboardForUser(chatId: number, page: number = 1) {
@@ -1918,6 +1946,30 @@ async function startTelegramBotPolling() {
                   await saveBotChatState(chatId, state);
                   await Promise.all(idsToDelete.map(id => deleteMessageSafe(chatId, id)));
                 }
+              } else if (callbackData?.startsWith("dismiss_admin_")) {
+                const targetId = callbackData.replace("dismiss_admin_", "");
+                const senderId = String(callbackQuery.from.id);
+                if (admins.includes(senderId)) {
+                  if (targetId === senderId && admins.length === 1) {
+                    await sendCleanBotMessage(chatId, "⚠️ Вы не можете разжаловать себя, так как вы единственный администратор!");
+                  } else {
+                    admins = admins.filter(id => id !== targetId);
+                    saveConfig();
+                    await sendCleanBotMessage(chatId, `✅ Администратор с ID \`${targetId}\` успешно разжалован!`);
+                  }
+                } else {
+                  await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
+                }
+              } else if (callbackData?.startsWith("dismiss_mod_")) {
+                const targetId = callbackData.replace("dismiss_mod_", "");
+                const senderId = String(callbackQuery.from.id);
+                if (admins.includes(senderId)) {
+                  moderators = moderators.filter(id => id !== targetId);
+                  saveConfig();
+                  await sendCleanBotMessage(chatId, `✅ Модератор с ID \`${targetId}\` успешно разжалован!`);
+                } else {
+                  await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
+                }
               } else if (callbackData === "last_notification") {
                 const state = await getBotChatState(chatId);
                 const lastNots = state.lastNotificationText || "📭 У вас пока нет сохраненных уведомлений.";
@@ -2098,7 +2150,7 @@ async function startTelegramBotPolling() {
                     statsLine = `👤 Игрок: *${welcomeName}*\n\n`;
                   }
 
-                  const finalSuccessMsg = `ура вы подключены, теперь у вас доступ к уведомлениям! 🎮\n\n${statsLine}✨ Ваш игровой профиль успешно синхронизирован с Telegram!`;
+                  const finalSuccessMsg = `Ура! Вы подключены, теперь у вас есть доступ к уведомлениям! 🎮\n\n${statsLine}✨ Ваш игровой профиль успешно синхронизирован с Telegram!`;
 
                   await sendCleanBotMessage(chatId, finalSuccessMsg, {
                     reply_markup: DEFAULT_KEYBOARD
@@ -2149,53 +2201,6 @@ async function startTelegramBotPolling() {
 
               await sendCleanBotMessage(chatId, codeMessage, {
                 reply_markup: DEFAULT_KEYBOARD
-              });
-            } else if (mappedText.toLowerCase() === "/last_notification" || mappedText.toLowerCase() === "/last") {
-              const state = await getBotChatState(chatId);
-              const lastNots = state.lastNotificationText || "📭 У вас пока нет сохраненных уведомлений.";
-              await sendCleanBotMessage(chatId, `🔔 *Последнее уведомление:*\n\n${lastNots}`, {
-                keepHistory: true,
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      { text: "❌ Удалить сообщение", callback_data: "delete_this" },
-                      { text: "🧹 Удалить всё", callback_data: "delete_all" }
-                    ]
-                  ]
-                }
-              });
-            } else if (mappedText.toLowerCase() === "/play") {
-              await sendCleanBotMessage(chatId, "🎮 *Погнали играть!*\n\nЗапускай игру прямо сейчас по ссылке:", {
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      { text: "🎮 Открыть Игру", url: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app" }
-                    ]
-                  ]
-                }
-              });
-            } else if (mappedText.toLowerCase() === "/clear_chat" || mappedText.toLowerCase() === "/clear") {
-              const state = await getBotChatState(chatId);
-              if (state && state.sentMessageIds) {
-                const idsToDelete = [...state.sentMessageIds];
-                state.sentMessageIds = [];
-                await saveBotChatState(chatId, state);
-                await Promise.all(idsToDelete.map(id => deleteMessageSafe(chatId, id)));
-              }
-              await sendCleanBotMessage(chatId, "🧹 *История уведомлений и чата бота успешно очищена!* ", {
-                reply_markup: DEFAULT_KEYBOARD
-              });
-            } else if (mappedText.toLowerCase() === "/support") {
-              state.supportMode = true;
-              state.supportDraft = [];
-              await saveBotChatState(chatId, state);
-              const msg = `💬 *Служба поддержки*\n\nНапишите ниже текст вашего обращения к администрации 👇`;
-              await sendCleanBotMessage(chatId, msg, {
-                reply_markup: {
-                  keyboard: [[{ text: "❌ Отмена" }]],
-                  resize_keyboard: true,
-                  is_persistent: true
-                }
               });
             } else if (mappedText.toLowerCase() === "/save" || mappedText.toLowerCase() === "save" || mappedText.toLowerCase() === "/сохранить" || mappedText.toLowerCase() === "сохранить" || mappedText.toLowerCase() === "/profile" || mappedText.toLowerCase() === "/профиль") {
               const tgId = String(from.id);
@@ -2269,27 +2274,35 @@ async function startTelegramBotPolling() {
                   });
                   const authClient = await auth.getClient();
                   const sheets = google.sheets({ version: 'v4', auth: authClient as any });
-                  const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: masterSheetId });
-                  sheetTabs = sheetMeta.data.sheets?.map(s => s.properties?.title || '').filter(Boolean) || [];
-                } catch (e: any) {
-                  console.error("Failed to fetch sheet tabs:", e.message || e);
+                  const response = await sheets.spreadsheets.get({
+                    spreadsheetId: masterSheetId,
+                  });
+                  if (response.data.sheets) {
+                    sheetTabs = response.data.sheets
+                      .map(s => s.properties?.title || "")
+                      .filter(Boolean);
+                  }
+                } catch (err) {
+                  console.error("Failed to fetch sheet tabs in telegram table cmd:", err);
                 }
 
                 const sheetLink = `https://docs.google.com/spreadsheets/d/${masterSheetId}/edit`;
                 let tabMsg = "";
-                let inline_keyboard: any[] = [];
-                
+                const inline_keyboard: any[] = [];
                 if (sheetTabs.length > 0) {
-                  tabMsg = "\n\n📂 *Доступные листы (вкладки по годам):*\n" + sheetTabs.map(tab => `• 📅 *${tab} год*`).join("\n");
-                  const buttons: any[] = sheetTabs.map(tab => ({ text: `📅 ${tab} год`, url: sheetLink }));
-                  const chunked: any[] = [];
-                  for (let i = 0; i < buttons.length; i += 2) {
-                    chunked.push(buttons.slice(i, i + 2));
+                  tabMsg = "\n\n📂 Доступные листы (вкладки по годам):\n" + sheetTabs.map(tab => `• 📅 ${tab} год`).join("\n");
+                  const rows: any[] = [];
+                  for (let i = 0; i < sheetTabs.length; i += 2) {
+                    const row: any[] = [];
+                    row.push({ text: `📅 ${sheetTabs[i]}`, url: sheetLink });
+                    if (sheetTabs[i + 1]) {
+                      row.push({ text: `📅 ${sheetTabs[i + 1]}`, url: sheetLink });
+                    }
+                    rows.push(row);
                   }
-                  inline_keyboard = chunked;
-                } else {
-                  inline_keyboard = [[{ text: "📊 Открыть таблицу", url: sheetLink }]];
+                  inline_keyboard.push(...rows);
                 }
+                inline_keyboard.push([{ text: "🔗 Открыть Google Таблицу", url: sheetLink }]);
 
                 await sendCleanBotMessage(chatId, `📊 *Google Таблицы*\n\nНиже представлены ссылки на листы по годам для удобного просмотра и ручного редактирования:${tabMsg}`, {
                   parse_mode: "Markdown",
@@ -2298,22 +2311,22 @@ async function startTelegramBotPolling() {
                   }
                 });
               } else {
-                await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не подключена администратором.");
+                await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не настроена администратором.");
               }
             } else if (mappedText.toLowerCase().startsWith("/mod_panel") || mappedText.toLowerCase().startsWith("/mod")) {
               const senderId = String(from.id);
-              if (moderators.includes(senderId) || admins.includes(senderId)) {
+              if (isModeratorId(senderId) || isAdminId(senderId)) {
                 const code = mappedText.split(" ")[1]?.trim();
                 if (code) {
                   const targetPlayerId = adminVerificationCodes.get(code);
                   if (targetPlayerId) {
-                    const isSenderAdmin = admins.includes(senderId);
+                    const isSenderAdmin = isAdminId(senderId);
                     if (isSenderAdmin) {
-                      if (!admins.includes(targetPlayerId)) {
+                      if (!isAdminId(targetPlayerId)) {
                         admins.push(targetPlayerId);
                       }
                     } else {
-                      if (!moderators.includes(targetPlayerId)) {
+                      if (!isModeratorId(targetPlayerId)) {
                         moderators.push(targetPlayerId);
                       }
                     }
@@ -2352,7 +2365,7 @@ async function startTelegramBotPolling() {
                   await sendCleanBotMessage(chatId, `✅ *Общая Google Таблица успешно настроена!*\n\nID: \`${sheetId}\`\n🔗 [Открыть таблицу](${sheetLink})\n\nТеперь вы можете добавлять данные игроков в таблицу, просто написав их имя/логин/ID, или введя команду:\n✍️ \`/add имя_или_логин\``, { parse_mode: "Markdown" });
                 }
               }
-            } else if (mappedText.startsWith("/add_admin ") || mappedText.startsWith("/make_admin ")) {
+            } else if (mappedText.startsWith("/add_admin ") || mappedText.startsWith("/make_admin ") || mappedText.startsWith("/addadmin ")) {
               const senderId = String(from.id);
               if (admins.length === 0 || admins.includes(senderId)) {
                 const targetId = mappedText.split(" ")[1]?.trim();
@@ -2363,7 +2376,7 @@ async function startTelegramBotPolling() {
                   }
                   await sendCleanBotMessage(chatId, `✅ Игрок с Telegram ID \`${targetId}\` успешно добавлен в администраторы бота!`);
                 } else {
-                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/add_admin <id>`");
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/addadmin <id>`");
                 }
               } else {
                 await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
@@ -2390,28 +2403,47 @@ async function startTelegramBotPolling() {
               if (isStaff(senderId)) {
                 const adminsList = admins.length > 0 ? admins.map(id => `• \`${id}\``).join("\n") : "_Нет_";
                 const modsList = moderators.length > 0 ? moderators.map(id => `• \`${id}\``).join("\n") : "_Нет_";
-                await sendCleanBotMessage(chatId, `👥 *Список персонала:*\n\n👑 *Администраторы:*\n${adminsList}\n\n🛠️ *Модераторы:*\n${modsList}`);
+                
+                const inline_keyboard: any[] = [];
+                if (admins.includes(senderId)) {
+                  // Add buttons for dismissing
+                  if (admins.length > 0) {
+                    admins.forEach(id => {
+                      inline_keyboard.push([{ text: `❌ Разжаловать Админа (${id})`, callback_data: `dismiss_admin_${id}` }]);
+                    });
+                  }
+                  if (moderators.length > 0) {
+                    moderators.forEach(id => {
+                      inline_keyboard.push([{ text: `❌ Разжаловать Модера (${id})`, callback_data: `dismiss_mod_${id}` }]);
+                    });
+                  }
+                }
+
+                await sendCleanBotMessage(chatId, `👥 *Список персонала:*\n\n👑 *Администраторы:*\n${adminsList}\n\n🛠️ *Модераторы:*\n${modsList}`, {
+                  parse_mode: "Markdown",
+                  reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
+                });
               } else {
                 await sendCleanBotMessage(chatId, "❌ Данная команда доступна только персоналу бота!");
               }
             } else if (mappedText.toLowerCase() === "/prompt_add_admin") {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
-                await sendCleanBotMessage(chatId, "✍️ Чтобы назначить нового *администратора*, введите команду:\n`/add_admin <Telegram ID>`");
+                await sendCleanBotMessage(chatId, "✍️ Чтобы назначить нового *администратора*, введите команду:\n`/addadmin <Telegram ID>`");
               } else {
                 await sendCleanBotMessage(chatId, "❌ Изменять состав администраторов может только администратор!");
               }
             } else if (mappedText.toLowerCase() === "/prompt_add_mod") {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
-                await sendCleanBotMessage(chatId, "✍️ Чтобы назначить нового *модератора*, введите команду:\n`/add_mod <Telegram ID>`");
+                await sendCleanBotMessage(chatId, "✍️ Чтобы назначить нового *модератора*, введите команду:\n`/addmod <Telegram ID>`");
               } else {
                 await sendCleanBotMessage(chatId, "❌ Назначать модераторов может только администратор!");
               }
             } else if (mappedText.toLowerCase() === "/prompt_exclude") {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
-                await sendCleanBotMessage(chatId, "✍️ Чтобы *исключить (разжаловать)* администратора или модератора, отправьте соответствующую команду:\n\n❌ Разжаловать админа:\n`/del_admin <Telegram ID>`\n\n❌ Разжаловать модератора:\n`/del_mod <Telegram ID>`");
+                await sendCleanBotMessage(chatId, "✍️ Чтобы *исключить (разжаловать)* администратора или модератора, отправьте соответствующую команду:\n\n❌ Разжаловать админа:\n`/removeadmin <Telegram ID>`\n\n❌ Разжаловать модератора:\n`/removemod <Telegram ID>`\n\n💡 Или нажмите на кнопку «👥 Персонал», чтобы увидеть кнопки быстрого удаления.");
               } else {
                 await sendCleanBotMessage(chatId, "❌ Управлять персоналом может только администратор!");
               }
@@ -2422,7 +2454,7 @@ async function startTelegramBotPolling() {
               } else {
                 await sendCleanBotMessage(chatId, "❌ Настраивать общую таблицу могут только администраторы!");
               }
-            } else if (mappedText.startsWith("/add_mod ")) {
+            } else if (mappedText.startsWith("/add_mod ") || mappedText.startsWith("/addmod ")) {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
                 const targetId = mappedText.split(" ")[1]?.trim();
@@ -2433,12 +2465,12 @@ async function startTelegramBotPolling() {
                   }
                   await sendCleanBotMessage(chatId, `✅ Игрок с Telegram ID \`${targetId}\` успешно добавлен в модераторы бота!`);
                 } else {
-                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/add_mod <id>`");
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/addmod <id>`");
                 }
               } else {
                 await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
               }
-            } else if (mappedText.startsWith("/del_admin ") || mappedText.startsWith("/remove_admin ")) {
+            } else if (mappedText.startsWith("/del_admin ") || mappedText.startsWith("/remove_admin ") || mappedText.startsWith("/removeadmin ")) {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
                 const targetId = mappedText.split(" ")[1]?.trim();
@@ -2451,12 +2483,12 @@ async function startTelegramBotPolling() {
                     await sendCleanBotMessage(chatId, `✅ Администратор с Telegram ID \`${targetId}\` успешно разжалован!`);
                   }
                 } else {
-                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/del_admin <id>`");
+                  await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/removeadmin <id>`");
                 }
               } else {
                 await sendCleanBotMessage(chatId, "❌ У вас нет прав администратора!");
               }
-            } else if (mappedText.startsWith("/del_mod ") || mappedText.startsWith("/remove_mod ")) {
+            } else if (mappedText.startsWith("/del_mod ") || mappedText.startsWith("/remove_mod ") || mappedText.startsWith("/removemod ")) {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
                 const targetId = mappedText.split(" ")[1]?.trim();
