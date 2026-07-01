@@ -2895,7 +2895,7 @@ export default function App() {
           },
           () => {}
         ).catch(err => {
-          console.error("Camera start error:", err);
+          console.warn("Camera start error:", err);
           let errorMsg = "⚠️ Камера недоступна.";
           if (err?.name === "NotAllowedError" || String(err).includes("NotAllowedError") || String(err).includes("Permission denied") || String(err).includes("dismissed")) {
             errorMsg = "❌ Доступ к камере отклонен или заблокирован в браузере. Пожалуйста, загрузите скриншот QR-кода ниже.";
@@ -4683,7 +4683,7 @@ export default function App() {
                     const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setActiveVoiceStream(stream);
                   } catch (err: any) {
-                    console.error("Failed to access microphone", err);
+                    console.warn("Failed to access microphone", err);
                     let message = "🎤 Не удалось получить доступ к микрофону.";
                     if (err.name === "NotFoundError") message = "🎤 Микрофон не найден. Проверьте, подключен ли микрофон к компьютеру.";
                     else if (err.name === "NotAllowedError") message = "🎤 Нет разрешения на использование микрофона. Разрешите его в настройках браузера.";
@@ -6588,7 +6588,7 @@ export default function App() {
                               const stream = await navigator.mediaDevices.getUserMedia(constraints);
                               setActiveFriendVoiceStream(stream);
                             } catch (err: any) {
-                              console.error("Failed to access microphone", err);
+                              console.warn("Failed to access microphone", err);
                               let message = "🎤 Не удалось получить доступ к микрофону.";
                               if (err.name === "NotFoundError") message = "🎤 Микрофон не найден. Проверьте, подключен ли микрофон к компьютеру.";
                               else if (err.name === "NotAllowedError") message = "🎤 Нет разрешения на использование микрофона. Разрешите его в настройках браузера.";
