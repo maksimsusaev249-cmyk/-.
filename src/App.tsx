@@ -3209,24 +3209,54 @@ export default function App() {
     }
   };
 
-  const handleGoogleSignOut = async () => {
+  const handleSignOut = async () => {
+    if (!currentUser) return;
+    
+    const isTg = currentUser.email?.startsWith("tg_");
+    const isVk = currentUser.email?.startsWith("vk_");
+    
     setConfirmModal({
       isOpen: true,
       title: "Выход из аккаунта",
-      message: "Вы действительно хотите выйти из своего аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
+      message: `Вы действительно хотите выйти из своего ${isTg ? 'Telegram' : isVk ? 'VK' : 'Google'} аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.`,
       confirmText: "Да, выйти",
       cancelText: "Отмена",
       onConfirm: async () => {
-        setIsAuthLoading(true);
-        if (currentUser) {
-          await saveToFirestore(currentUser, true);
-        }
-        sessionStorage.setItem("skipVKAutoLogin", "true");
         setConfirmModal(null);
-        signOut(auth);
+        setIsAuthLoading(true);
+        addToast("⏳ Выходим из аккаунта...");
+        
+        try {
+          // 1. Save current progress to Firestore
+          await saveToFirestore(currentUser, true);
+          
+          // 2. Additional sync for VK users
+          if (isVk) {
+            addToast("☁️ Синхронизация с VK Cloud...");
+            await syncWithVKCloud();
+          }
+          
+          // 3. Mark for skipping auto-login on next refresh
+          sessionStorage.setItem("skipVKAutoLogin", "true");
+          
+          // 4. Perform actual sign out
+          await signOut(auth);
+          
+          addToast("👋 Вы успешно вышли!");
+        } catch (err: any) {
+          console.error("Sign out error:", err);
+          addToast(`⚠️ Ошибка при выходе: ${err.message || err}`);
+          // Force clear local state anyway if auth failed
+          setCurrentUser(null);
+          setIsAuthLoading(false);
+        }
       }
     });
   };
+
+  const handleGoogleSignOut = handleSignOut;
+  const handleVKSignOut = handleSignOut;
+  const handleTelegramSignOut = handleSignOut;
 
   const handleTelegramAuth = () => {
     // Only open the bot if not already polling
@@ -3647,25 +3677,6 @@ export default function App() {
     }
   };
 
-  const handleVKSignOut = async () => {
-    setConfirmModal({
-      isOpen: true,
-      title: "Выход из аккаунта",
-      message: "Вы действительно хотите выйти из своего VK аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
-      confirmText: "Да, выйти",
-      cancelText: "Отмена",
-      onConfirm: async () => {
-        setIsAuthLoading(true);
-        if (currentUser) {
-          await saveToFirestore(currentUser, true);
-          await syncWithVKCloud();
-        }
-        sessionStorage.setItem("skipVKAutoLogin", "true");
-        setConfirmModal(null);
-        signOut(auth);
-      }
-    });
-  };
 
   const handleTelegramCodeLogin = async () => {
     if (!telegramCode.trim()) {
@@ -3700,24 +3711,6 @@ export default function App() {
     }
   };
 
-  const handleTelegramSignOut = async () => {
-    setConfirmModal({
-      isOpen: true,
-      title: "Выход из аккаунта",
-      message: "Вы действительно хотите выйти из своего Telegram аккаунта? Вы сможете быстро войти в него снова, используя список сохраненных аккаунтов.",
-      confirmText: "Да, выйти",
-      cancelText: "Отмена",
-      onConfirm: async () => {
-        setIsAuthLoading(true);
-        if (currentUser) {
-          await saveToFirestore(currentUser, true);
-        }
-        sessionStorage.setItem("skipVKAutoLogin", "true");
-        setConfirmModal(null);
-        signOut(auth);
-      }
-    });
-  };
 
   const handleToggleNotifications = async (val: boolean) => {
     setNotificationsEnabled(val);
@@ -7873,7 +7866,7 @@ export default function App() {
                       </button>
                     )}
                     <button 
-                      onClick={currentUser.email?.startsWith("tg_") ? handleTelegramSignOut : (currentUser.email?.startsWith("vk_") ? handleVKSignOut : handleGoogleSignOut)}
+                      onClick={handleSignOut}
                       className={`py-2.5 px-3 bg-slate-800 hover:bg-slate-700 transition-colors text-[10px] font-black rounded-lg cursor-pointer text-rose-300 border-none outline-none flex items-center justify-center h-full ${!isGlobalAdmin ? 'col-span-2' : ''}`}
                     >
                       Выйти
