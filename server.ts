@@ -1746,7 +1746,7 @@ async function startVkBotPolling() {
             } else if (mappedText.toLowerCase() === "/play") {
               const inlineKbd = JSON.stringify({
                 inline: true,
-                buttons: [[{ action: { type: "open_link", link: process.env.APP_URL || "https://klik-klan-scm6.onrender.com", label: "🎮 Открыть Игру" } }]]
+                buttons: [[{ action: { type: "open_link", link: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app", label: "🎮 Открыть Игру" } }]]
               });
               await sendVkMessage(peer_id, "🎮 *Погнали играть!*\n\nЗапускай игру прямо сейчас по ссылке:", { keyboard: inlineKbd });
             } else if (mappedText.toLowerCase() === "/clear_chat") {
@@ -2153,7 +2153,7 @@ async function startTelegramBotPolling() {
                 reply_markup: {
                   inline_keyboard: [
                     [
-                      { text: "🎮 Открыть Игру", url: process.env.APP_URL || "https://klik-klan-scm6.onrender.com" }
+                      { text: "🎮 Открыть Игру", url: process.env.APP_URL || "https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app" }
                     ]
                   ]
                 }

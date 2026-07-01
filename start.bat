@@ -10,10 +10,11 @@ echo.
 echo [1/4] Checking environment requirements...
 node -v >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Платформа Node.js не установлена!
-    echo Пожалуйста, запустите УСТАНОВКА_ИГРЫ.bat для автоматической установки.
-    echo.
-    pause
+    echo [INFO] Платформа Node.js не найдена!
+    echo [INFO] Запускаем веб-версию игры в вашем браузере по умолчанию...
+    start https://ais-pre-hp7aptrk5b2jplq55aftoy-728480963619.europe-west2.run.app
+    echo [INFO] Для установки Desktop-клиента, пожалуйста, установите Node.js
+    timeout /t 5 >nul
     exit /b
 )
 
