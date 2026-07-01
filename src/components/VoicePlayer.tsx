@@ -12,10 +12,32 @@ export const VoicePlayer: React.FC<VoicePlayerProps> = ({ voiceData, duration, c
   const [currentTime, setCurrentTime] = useState(0);
   const [progress, setProgress] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const isPlayingRef = useRef(false);
-  const animationFrameRef = useRef<number | null>(null);
 
-  const updateProgress = () => {
+  const handlePlay = () => {
+    setIsPlaying(true);
+    // Pause any other playing audio in the document
+    const audios = document.querySelectorAll("audio");
+    audios.forEach((aud) => {
+      if (aud !== audioRef.current) {
+        aud.pause();
+      }
+    });
+  };
+
+  const handlePause = () => {
+    setIsPlaying(false);
+  };
+
+  const handleEnded = () => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setProgress(0);
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+    }
+  };
+
+  const handleTimeUpdate = () => {
     const audio = audioRef.current;
     if (audio) {
       const current = audio.currentTime;
@@ -24,92 +46,29 @@ export const VoicePlayer: React.FC<VoicePlayerProps> = ({ voiceData, duration, c
       if (dur > 0) {
         setProgress((current / dur) * 100);
       }
-      if (isPlayingRef.current) {
-        animationFrameRef.current = requestAnimationFrame(updateProgress);
-      }
     }
   };
 
-  useEffect(() => {
-    const audio = new Audio(voiceData);
-    audioRef.current = audio;
-
-    const handlePlay = () => {
-      setIsPlaying(true);
-      isPlayingRef.current = true;
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      animationFrameRef.current = requestAnimationFrame(updateProgress);
-    };
-
-    const handlePause = () => {
-      setIsPlaying(false);
-      isPlayingRef.current = false;
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-
-    const handleEnded = () => {
-      setIsPlaying(false);
-      isPlayingRef.current = false;
-      setCurrentTime(0);
-      setProgress(0);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-
-    const handleTimeUpdate = () => {
-      const current = audio.currentTime;
-      const dur = audio.duration || duration || 0;
-      setCurrentTime(current);
-      if (dur > 0) {
-        setProgress((current / dur) * 100);
-      }
-    };
-
-    audio.addEventListener("play", handlePlay);
-    audio.addEventListener("pause", handlePause);
-    audio.addEventListener("ended", handleEnded);
-    audio.addEventListener("timeupdate", handleTimeUpdate);
-
-    return () => {
-      audio.pause();
-      audio.removeEventListener("play", handlePlay);
-      audio.removeEventListener("pause", handlePause);
-      audio.removeEventListener("ended", handleEnded);
-      audio.removeEventListener("timeupdate", handleTimeUpdate);
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-  }, [voiceData, duration]);
-
   const togglePlayPause = () => {
-    if (!audioRef.current) return;
+    const audio = audioRef.current;
+    if (!audio) return;
 
-    if (audioRef.current.paused) {
-      // Pause any other playing audio in the document if there are any
-      const audios = document.querySelectorAll("audio");
-      audios.forEach((aud) => {
-        if (aud !== audioRef.current) {
-          aud.pause();
-        }
+    if (audio.paused) {
+      audio.play().catch((err) => {
+        console.error("Audio play failed:", err);
       });
-      audioRef.current.play().catch((err) => console.error("Audio play failed:", err));
     } else {
-      audioRef.current.pause();
+      audio.pause();
     }
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!audioRef.current) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     const value = parseFloat(e.target.value);
-    const dur = audioRef.current.duration || duration || 0;
+    const dur = audio.duration || duration || 0;
     const newTime = (value / 100) * dur;
-    audioRef.current.currentTime = newTime;
+    audio.currentTime = newTime;
     setCurrentTime(newTime);
     setProgress(value);
   };
@@ -122,8 +81,26 @@ export const VoicePlayer: React.FC<VoicePlayerProps> = ({ voiceData, duration, c
 
   const displayDuration = duration || (audioRef.current ? audioRef.current.duration : 0) || 0;
 
+  // Sync src element when voiceData changes
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.load();
+    }
+  }, [voiceData]);
+
   return (
     <div id="voice-player-root" className="flex items-center gap-2.5 bg-slate-950/80 rounded-2xl p-2.5 px-3 border border-white/5 max-w-[240px] select-none shadow-md mt-1.5 relative overflow-hidden">
+      <audio
+        ref={audioRef}
+        src={voiceData}
+        className="hidden"
+        preload="metadata"
+        onPlay={handlePlay}
+        onPause={handlePause}
+        onEnded={handleEnded}
+        onTimeUpdate={handleTimeUpdate}
+      />
+
       {/* Decorative pulse background when playing */}
       {isPlaying && (
         <div className="absolute inset-0 bg-amber-500/5 animate-pulse pointer-events-none" />
@@ -133,7 +110,7 @@ export const VoicePlayer: React.FC<VoicePlayerProps> = ({ voiceData, duration, c
         type="button"
         onClick={togglePlayPause}
         style={{ color: color }}
-        className="flex items-center justify-center w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 transition-all shrink-0 cursor-pointer relative z-10"
+        className="flex items-center justify-center w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 transition-all shrink-0 cursor-pointer relative z-10 border-none outline-none"
         title={isPlaying ? "Пауза" : "Воспроизвести"}
       >
         {isPlaying ? <Pause size={14} className="fill-current" /> : <Play size={14} className="fill-current ml-0.5" />}

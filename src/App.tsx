@@ -603,6 +603,15 @@ export default function App() {
   const [globalChatHistory, setGlobalChatHistory] = useState<ChatMessage[]>([]);
   const [clanChatHistory, setClanChatHistory] = useState<ChatMessage[]>([]);
   const [chatChannel, setChatChannel] = useState<"global" | "clan">("global");
+  const [isClanMicEnabled, setIsClanMicEnabled] = useState<boolean>(() => {
+    const saved = safeGetItem("gameClanMicEnabledV1");
+    return saved !== "false";
+  });
+
+  useEffect(() => {
+    safeSetItem("gameClanMicEnabledV1", String(isClanMicEnabled));
+  }, [isClanMicEnabled]);
+
   const [friendsList, setFriendsList] = useState<string[]>(() => {
     const saved = safeGetItem("gameFriendsV9");
     return saved ? JSON.parse(saved) : [];
@@ -762,6 +771,7 @@ export default function App() {
   const [isSubmittingReferral, setIsSubmittingReferral] = useState(false);
   const [myReferrer, setMyReferrer] = useState<string | null>(null);
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [pendingQrAuthData, setPendingQrAuthData] = useState<any>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isInviteOptionsOpen, setIsInviteOptionsOpen] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
@@ -1001,7 +1011,8 @@ export default function App() {
   const [newClanName, setNewClanName] = useState("");
   const [newClanPassword, setNewClanPassword] = useState("");
   const [isClanPrivate, setIsClanPrivate] = useState(false);
-  const [clansPrivacy, setClansPrivacy] = useState<{ name: string; isPrivate: boolean }[]>([]);
+  const [newClanVoiceEnabled, setNewClanVoiceEnabled] = useState(true);
+  const [clansPrivacy, setClansPrivacy] = useState<{ name: string; isPrivate: boolean; creatorId?: string; voiceEnabled?: boolean }[]>([]);
   
   // Trigger overlay modals without blocking iFrame alerts/confirms
   const [joiningClanWithPassword, setJoiningClanWithPassword] = useState<string | null>(null);
@@ -1987,6 +1998,13 @@ export default function App() {
       return;
     }
 
+    const currentClanInfo = clansPrivacy.find(c => c.name === playerClan);
+    const isVoiceEnabled = currentClanInfo ? currentClanInfo.voiceEnabled !== false : true;
+    if (isClanOnly && !isVoiceEnabled) {
+      addToast("⚠️ Голосовые сообщения отключены создателем в настройках клана.");
+      return;
+    }
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
        socketRef.current.send(JSON.stringify({
          type: "chat_msg",
@@ -2013,11 +2031,26 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       let ref = params.get("ref");
       let clanParam = params.get("clan");
+      let loginTokenParam = params.get("login_token");
       if (window.location.hash) {
-        const hashParams = new URLSearchParams(window.location.hash.split("?")[1] || "");
+        const hashPart = window.location.hash.split("?")[1] || "";
+        const hashParams = new URLSearchParams(hashPart);
         if (!ref) ref = hashParams.get("ref");
         if (!clanParam) clanParam = hashParams.get("clan");
+        if (!loginTokenParam) loginTokenParam = hashParams.get("login_token");
       }
+
+      if (loginTokenParam) {
+        console.log("Captured login token from URL:", loginTokenParam);
+        // We don't auto-login immediately here to allow the component to finish initial mount 
+        // and to avoid race conditions with auth state. We'll use a separate effect.
+        safeSetItem("game_pending_login_token", loginTokenParam);
+        // Clean up URL to prevent repeat login on refresh
+        const url = new URL(window.location.href);
+        url.searchParams.delete("login_token");
+        window.history.replaceState({}, document.title, url.pathname + url.search);
+      }
+
       if (ref) {
         console.log("Captured referral ID from URL:", ref);
         safeSetItem("game_referrer_id", ref);
@@ -2030,6 +2063,33 @@ export default function App() {
       console.error("Failed to parse URL parameters:", e);
     }
   }, []);
+
+  // --- HANDLE PENDING LOGIN TOKEN FROM URL ---
+  useEffect(() => {
+    if (currentUser) return;
+    const pendingToken = safeGetItem("game_pending_login_token");
+    if (pendingToken) {
+      safeRemoveItem("game_pending_login_token");
+      addToast("🔄 Обнаружен код входа из ссылки...");
+      fetch(getApiUrl("/api/exchange-login-token"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: pendingToken })
+      })
+        .then(async (res) => {
+          const data = await res.json();
+          if (data.success) {
+            setPendingQrAuthData(data);
+            addToast("🔑 Аккаунт найден! Подтвердите вход.");
+          } else {
+            addToast(`❌ Ошибка кода: ${data.error || "Не удалось войти."}`);
+          }
+        })
+        .catch(err => {
+          console.error("URL login token error:", err);
+        });
+    }
+  }, [currentUser]);
 
   // Check for pending clan join on startup
   useEffect(() => {
@@ -2702,8 +2762,8 @@ export default function App() {
           .then(async (res) => {
             const data = await res.json();
             if (data.success) {
-              await performTelegramAuth(data.email, data.password, data.displayName, data.photoURL);
-              addToast("✅ Вход успешно выполнен!");
+              setPendingQrAuthData(data);
+              addToast("🔑 Аккаунт найден! Подтвердите вход.");
             } else {
               addToast(`❌ Ошибка: ${data.error || "Не удалось войти по коду."}`);
             }
@@ -4087,7 +4147,8 @@ export default function App() {
         data: {
           id: effectivePlayerId,
           name,
-          password: isClanPrivate ? newClanPassword : ""
+          password: isClanPrivate ? newClanPassword : "",
+          voiceEnabled: newClanVoiceEnabled
         }
       }));
     } else {
@@ -4370,6 +4431,8 @@ export default function App() {
   const renderChatContent = () => {
     const me = onlinePlayers.find(p => p.id === effectivePlayerId);
     const isPrivileged = me?.isAdmin || me?.isModerator;
+    const currentClanInfo = clansPrivacy.find(c => c.name === playerClan);
+    const isVoiceEnabled = currentClanInfo ? currentClanInfo.voiceEnabled !== false : true;
     
     return (
       <div className="flex flex-col h-full justify-between min-h-0 text-white">
@@ -4588,6 +4651,10 @@ export default function App() {
                 type="button"
                 onClick={async () => {
                   try {
+                    if (chatChannel === "clan" && !isVoiceEnabled) {
+                      addToast("⚠️ Голосовые сообщения отключены создателем в настройках клана.");
+                      return;
+                    }
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                       addToast("🎤 В этом браузере не поддерживается запись голоса");
                       return;
@@ -4595,7 +4662,7 @@ export default function App() {
                     const constraints = selectedMicId ? { audio: { deviceId: { exact: selectedMicId } } } : { audio: true };
                     const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setActiveVoiceStream(stream);
-                      } catch (err: any) {
+                  } catch (err: any) {
                     console.error("Failed to access microphone", err);
                     let message = "🎤 Не удалось получить доступ к микрофону.";
                     if (err.name === "NotFoundError") message = "🎤 Микрофон не найден. Проверьте, подключен ли микрофон к компьютеру.";
@@ -4603,8 +4670,12 @@ export default function App() {
                     addToast(message);
                   }
                 }}
-                className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-gray-400 hover:text-white transition-colors outline-none cursor-pointer shrink-0"
-                title="Записать голосовое сообщение"
+                className={`w-9 h-9 flex items-center justify-center rounded-xl border transition-colors outline-none cursor-pointer shrink-0 ${
+                  chatChannel === "clan" && !isVoiceEnabled
+                    ? "bg-slate-950 border-slate-900/40 text-gray-600 opacity-50 cursor-not-allowed"
+                    : "bg-slate-900 border-slate-800 hover:border-slate-700 text-gray-400 hover:text-white"
+                }`}
+                title={chatChannel === "clan" && !isVoiceEnabled ? "Голосовые сообщения отключены в настройках клана" : "Записать голосовое сообщение"}
               >
                 <Mic size={14} />
               </button>
@@ -6001,20 +6072,41 @@ export default function App() {
                         className="w-full px-3 py-2 bg-slate-950 border border-slate-800 text-[11px] text-[#ffbc6e] tracking-wide outline-none focus:border-[#e67e22] mt-1 font-sans"
                       />
                     )}
+
+                    <div className="flex items-center justify-between mt-1 bg-slate-950 p-2 rounded-xl border border-slate-900">
+                      <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wider flex items-center gap-1">
+                        <Mic size={12} className={newClanVoiceEnabled ? "text-[#e67e22]" : "text-gray-500"} /> Голосовые сообщения (Микрофон)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setNewClanVoiceEnabled(!newClanVoiceEnabled)}
+                        className={`px-3 py-1 text-[10px] font-black uppercase rounded-lg transition-all cursor-pointer border-none outline-none ${
+                          newClanVoiceEnabled
+                            ? "bg-[#e67e22] text-white shadow-md shadow-[#e67e22]/20"
+                            : "bg-slate-800 text-gray-400 hover:text-white"
+                        }`}
+                      >
+                        {newClanVoiceEnabled ? "ВКЛ" : "ВЫКЛ"}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
 
               {/* My Clan block block */}
-              {playerClan && (
-                <div className="bg-[#111c2e] border border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.05)] rounded-2xl p-4 flex flex-col gap-3.5 select-none">
+              {playerClan && (() => {
+                const currentClanInfo = clansPrivacy.find(c => c.name === playerClan);
+                const isCreator = !currentClanInfo || !currentClanInfo.creatorId || currentClanInfo.creatorId === effectivePlayerId;
+                const isVoiceEnabled = currentClanInfo ? currentClanInfo.voiceEnabled !== false : true;
+                return (
+                  <div className="bg-[#111c2e] border border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.05)] rounded-2xl p-4 flex flex-col gap-3.5 select-none">
                   {/* Clan Header */}
                   <div className="flex justify-between items-center pb-2 border-b border-white/5">
                     <span className="text-sm font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2">
                        Мой Клан: {playerClan}
                     </span>
                     <div className="flex items-center gap-1.5">
-                      <button
+                       <button
                         onClick={() => setShowClanQrModal(playerClan)}
                         className="px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer border-none outline-none flex items-center gap-1"
                         title="Показать QR-код клана"
@@ -6028,6 +6120,80 @@ export default function App() {
                         Покинуть ✕
                       </button>
                     </div>
+                  </div>
+
+                  {/* Clan Microphone Setting (Only in clan, toggleable only by creator) */}
+                  <div className="flex items-center justify-between p-3 bg-slate-950/60 rounded-xl border border-white/5 text-xs">
+                    <div className="flex flex-col gap-0.5 max-w-[70%]">
+                      <span className="font-extrabold uppercase tracking-wider text-gray-300 flex items-center gap-1.5">
+                        <Mic size={13} className={isVoiceEnabled ? "text-[#e67e22]" : "text-gray-500"} />
+                        Голосовой чат клана
+                      </span>
+                      <span className="text-[9px] text-gray-500 leading-normal">
+                        {!currentClanInfo || !currentClanInfo.creatorId
+                          ? "🛡️ Нажмите ВКЛ или ВЫКЛ, чтобы установить статус создателя клана."
+                          : isCreator 
+                            ? "🛡️ Вы создатель клана. Вы можете включить или отключить голосовые сообщения." 
+                            : "👤 Только создатель клана может изменить эту настройку."}
+                      </span>
+                    </div>
+
+                    {isCreator ? (
+                      <div className="flex bg-slate-900 p-0.5 rounded-lg border border-white/5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                              socketRef.current.send(JSON.stringify({
+                                type: "update_clan_voice",
+                                data: {
+                                  clanName: playerClan,
+                                  voiceEnabled: true,
+                                  playerId: effectivePlayerId
+                                }
+                              }));
+                            }
+                          }}
+                          className={`px-3 py-1 text-[10px] font-black uppercase rounded transition-all cursor-pointer border-none outline-none ${
+                            isVoiceEnabled
+                              ? "bg-[#e67e22] text-white shadow"
+                              : "text-gray-400 hover:text-white bg-transparent"
+                          }`}
+                        >
+                          ВКЛ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                              socketRef.current.send(JSON.stringify({
+                                type: "update_clan_voice",
+                                data: {
+                                  clanName: playerClan,
+                                  voiceEnabled: false,
+                                  playerId: effectivePlayerId
+                                }
+                              }));
+                            }
+                          }}
+                          className={`px-3 py-1 text-[10px] font-black uppercase rounded transition-all cursor-pointer border-none outline-none ${
+                            !isVoiceEnabled
+                              ? "bg-slate-700 text-white shadow"
+                              : "text-gray-400 hover:text-white bg-transparent"
+                          }`}
+                        >
+                          ВЫКЛ
+                        </button>
+                      </div>
+                    ) : (
+                      <span className={`px-2.5 py-1 text-[10px] font-black uppercase rounded-lg border shrink-0 ${
+                        isVoiceEnabled
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : "bg-red-500/10 text-red-400 border-red-500/20"
+                      }`}>
+                        {isVoiceEnabled ? "ВКЛ" : "ВЫКЛ"}
+                      </span>
+                    )}
                   </div>
 
                   {/* Tabs matching the diagram: "игроки" and "предметы" under the 'тип клан' format */}
@@ -6171,7 +6337,8 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              )}
+              );
+            })()}
 
               {/* Clans listed dynamically from clansPrivacy to fully support offline search */}
               <div className="flex flex-col gap-3">
@@ -8201,10 +8368,11 @@ export default function App() {
                 signOut(auth);
                 setCurrentUser(null);
                 setLinkedTelegramId(null);
+                sessionStorage.setItem("skipVKAutoLogin", "true");
               }}
-              className="w-full py-3 bg-transparent text-gray-500 text-xs font-bold transition-all hover:text-white cursor-pointer border-none outline-none mt-1"
+              className="w-full py-3 bg-white/5 text-gray-300 text-xs font-black uppercase tracking-widest transition-all hover:bg-white/10 hover:text-white cursor-pointer border border-white/5 rounded-2xl mt-1 flex items-center justify-center gap-2"
             >
-              Выйти из аккаунта
+              <LogOut size={12} className="text-rose-500" /> Вернуться к авторизации
             </button>
           </div>
         </motion.div>
@@ -8573,6 +8741,73 @@ export default function App() {
 
         {/* Hidden QR Dummy container for image scanner library */}
         <div id="qr-reader-dummy" className="hidden" />
+
+        {/* QR LOGIN CONFIRMATION MODAL */}
+        {pendingQrAuthData && (
+          <div className="fixed inset-0 bg-black/92 backdrop-blur-xl z-[6000] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="w-full max-w-xs bg-[#162239] border border-amber-500/30 rounded-[32px] p-7 shadow-2xl flex flex-col gap-6 items-center text-center"
+            >
+              <div className="relative">
+                {pendingQrAuthData.photoURL ? (
+                  <img 
+                    src={pendingQrAuthData.photoURL} 
+                    alt="Account Avatar" 
+                    className="w-24 h-24 rounded-[32px] object-cover border-2 border-amber-500/30 shadow-lg shadow-amber-500/10"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-24 h-24 rounded-[32px] bg-gradient-to-br from-amber-500/10 to-amber-600/20 border-2 border-amber-500/30 flex items-center justify-center text-3xl font-black text-amber-500">
+                    {pendingQrAuthData.displayName?.slice(0, 1).toUpperCase() || "👤"}
+                  </div>
+                )}
+                <div className={`absolute -bottom-2 -right-2 px-3 py-1 rounded-full text-[10px] font-black text-white shadow-md uppercase tracking-widest border border-white/10 ${
+                  pendingQrAuthData.email?.startsWith("vk_") ? "bg-[#0077ff]" : "bg-[#2481cc]"
+                }`}>
+                  {pendingQrAuthData.email?.startsWith("vk_") ? "VK" : "TG"}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <h3 className="text-xl font-black text-white tracking-tight">Подтвердите вход</h3>
+                <p className="text-[13px] text-gray-400 font-medium leading-relaxed">
+                  Вы собираетесь войти как <span className="text-amber-500 font-bold">{pendingQrAuthData.displayName}</span>. Это действие свяжет ваше устройство с данным аккаунтом.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 w-full">
+                <button
+                  onClick={async () => {
+                    const data = pendingQrAuthData;
+                    setPendingQrAuthData(null);
+                    addToast("🔄 Выполняется вход...");
+                    try {
+                      if (data.email?.startsWith("vk_")) {
+                        await performVKAuth(data.email, data.password, data.displayName, data.photoURL);
+                      } else {
+                        await performTelegramAuth(data.email, data.password, data.displayName, data.photoURL);
+                      }
+                      addToast("✅ Вход успешно выполнен!");
+                    } catch (err: any) {
+                      addToast(`❌ Ошибка авторизации: ${err.message || "Неизвестная ошибка"}`);
+                    }
+                  }}
+                  className="w-full py-4 bg-amber-500 hover:bg-amber-400 active:scale-95 text-black font-black text-sm rounded-2xl transition-all shadow-lg shadow-amber-500/10 border-none cursor-pointer"
+                >
+                  ПОДТВЕРДИТЬ ВХОД
+                </button>
+                <button
+                  onClick={() => setPendingQrAuthData(null)}
+                  className="w-full py-3 bg-transparent text-gray-500 hover:text-white font-bold text-xs transition-all border-none cursor-pointer uppercase tracking-widest"
+                >
+                  Отмена
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
 
         {/* Toast notifications container */}
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-[4000] max-w-xs w-full pointer-events-none px-4">

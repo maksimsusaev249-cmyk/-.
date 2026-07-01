@@ -35,7 +35,30 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
       startTimeRef.current = Date.now();
       shouldSendRef.current = false;
 
-      const mediaRecorder = new MediaRecorder(stream);
+      // Detect supported mimeType
+      let options: MediaRecorderOptions = {};
+      const mimeTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+        "audio/aac",
+        "audio/wav"
+      ];
+      
+      for (const mimeType of mimeTypes) {
+        try {
+          if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(mimeType)) {
+            options = { mimeType };
+            console.log("Selected supported voice recording mimeType:", mimeType);
+            break;
+          }
+        } catch (e) {
+          // ignore issues checking support
+        }
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -47,8 +70,9 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
 
       mediaRecorder.onstop = async () => {
         console.log("Recording stopped, audio chunks:", audioChunksRef.current.length);
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        console.log("Audio blob size:", audioBlob.size);
+        const mimeTypeUsed = mediaRecorder.mimeType || options.mimeType || "audio/webm";
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeTypeUsed });
+        console.log("Audio blob size:", audioBlob.size, "MimeType:", mimeTypeUsed);
         const exactDurationSeconds = Math.max(1, Math.floor((Date.now() - startTimeRef.current) / 1000));
         
         const reader = new FileReader();
@@ -61,9 +85,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
           }
         };
 
-        // We do NOT stop the stream tracks here anymore, because we didn't create them inside VoiceRecorder.
-        // Actually, we SHOULD stop them to turn off the mic light, or let the parent do it.
-        // Let's stop them here to be safe and clean up.
+        // Stop all tracks to turn off mic indicator
         stream.getTracks().forEach((track) => track.stop());
       };
 
@@ -71,9 +93,27 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onSend, onCancel, 
         console.error("MediaRecorder error:", event);
       };
 
-      mediaRecorder.start(1000);
+      // Handle timeslice start error fallback
+      try {
+        if (mediaRecorder.state === "inactive") {
+          mediaRecorder.start(1000);
+        }
+      } catch (startErr) {
+        console.warn("Failed to start MediaRecorder with timeslice, trying without timeslice:", startErr);
+        try {
+          if (mediaRecorder.state === "inactive") {
+            mediaRecorder.start();
+          }
+        } catch (fallbackErr) {
+          console.error("Critical: Failed to start MediaRecorder even without timeslice:", fallbackErr);
+          if (mediaRecorder.state !== "recording") {
+            throw fallbackErr;
+          }
+        }
+      }
+
       setIsRecording(true);
-      console.log("MediaRecorder started");
+      console.log("MediaRecorder started successfully");
 
       timerRef.current = window.setInterval(() => {
         setRecordingTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
