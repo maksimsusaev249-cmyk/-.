@@ -2284,6 +2284,14 @@ async function startTelegramBotPolling() {
               } else {
                 await sendCleanBotMessage(chatId, "⚠️ Google Таблица еще не подключена администратором.");
               }
+            } else if (mappedText.toLowerCase() === "/mod_panel" || mappedText.toLowerCase() === "/mod") {
+              const senderId = String(from.id);
+              if (moderators.includes(senderId) || admins.includes(senderId)) {
+                const msg = `🛠️ *Панель модератора*\n\nВаш ключ подтверждения сгенерирован.\n\nПароль от консоли в игре:\n🔑 \`admin123\`\n\nИспользуйте его в игре для входа в панель управления.`;
+                await sendCleanBotMessage(chatId, msg, { parse_mode: "Markdown" });
+              } else {
+                await sendCleanBotMessage(chatId, "❌ Эта команда доступна только модераторам!");
+              }
             } else if (mappedText.startsWith("/set_table ")) {
               const sheetId = mappedText.split(" ")[1]?.trim();
               if (!sheetId) {

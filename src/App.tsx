@@ -976,6 +976,11 @@ export default function App() {
   // --- GOOGLE AUTHENTICATION STATES ---
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const effectivePlayerId = currentUser?.uid || playerId;
+  const globalMePlayer = onlinePlayers.find(p => p.id === effectivePlayerId);
+  const isGlobalModerator = globalMePlayer?.isModerator;
+  const isGlobalAdmin = globalMePlayer?.isAdmin;
+  const isGlobalPrivileged = isGlobalModerator || isGlobalAdmin;
+
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [syncProgress, setSyncProgress] = useState<number | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
@@ -4507,10 +4512,10 @@ export default function App() {
                     <div className="flex items-center gap-1.5 text-[10px] font-bold">
                       <span 
                         style={{ color: m.color }} 
-                        className="font-semibold cursor-pointer hover:underline block truncate max-w-[100px]"
+                        className="font-semibold cursor-pointer hover:underline flex items-center gap-1 truncate max-w-[130px]"
                         onClick={() => handleViewChatPlayerProfile(m.playerId, m.playerName)}
                       >
-                        {m.playerName}
+                        {m.playerName} {onlinePlayers.find(p => p.id === m.playerId)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === m.playerId)?.isModerator ? "🛠️" : ""}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
                       {isPrivileged && (
@@ -4572,8 +4577,8 @@ export default function App() {
                       )}
                       <span 
                         style={{ color: isSystem ? "#e67e22" : m.color }} 
-                        className={`font-black cursor-pointer block truncate ${
-                          isSystem ? "text-xs select-none font-sans font-black tracking-wider text-[#ffbc6e] uppercase" : "hover:underline max-w-[100px]"
+                        className={`font-black cursor-pointer flex items-center gap-1 truncate ${
+                          isSystem ? "text-xs select-none font-sans font-black tracking-wider text-[#ffbc6e] uppercase" : "hover:underline max-w-[130px]"
                         }`}
                         onClick={() => {
                           if (!isSystem) {
@@ -4581,7 +4586,7 @@ export default function App() {
                           }
                         }}
                       >
-                        {m.playerName}
+                        {m.playerName} {onlinePlayers.find(p => p.id === m.playerId)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === m.playerId)?.isModerator ? "🛠️" : ""}
                       </span>
                       <span className="text-gray-500 font-mono font-medium ml-auto">{m.timestamp}</span>
                       {isPrivileged && (
@@ -5905,7 +5910,7 @@ export default function App() {
                               </div>
                               <div className="flex flex-col min-w-0">
                                 <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5 shrink-0">
-                                  {p.name}
+                                  {p.name} {p.isAdmin ? "👑" : p.isModerator ? "🛠️" : ""}
                                   <span className={`w-2 h-2 rounded-full ${p.isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-gray-500"} shrink-0`} title={p.isOnline ? "Онлайн" : "Офлайн"}></span>
                                 </span>
                                 <span className="text-[10px] text-[#aab3c4] mt-0.5 font-mono truncate">
@@ -5981,7 +5986,7 @@ export default function App() {
                                 </div>
                                 <div className="flex flex-col min-w-0">
                                   <span className="font-extrabold text-xs text-white truncate flex items-center gap-1.5 shrink-0">
-                                    {p.name}
+                                    {p.name} {p.isAdmin ? "👑" : p.isModerator ? "🛠️" : ""}
                                     <span className={`w-2 h-2 rounded-full ${p.isOnline ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" : "bg-gray-500"} shrink-0`} title={p.isOnline ? "Онлайн" : "Офлайн"}></span>
                                   </span>
                                   <span className="text-[10px] text-[#aab3c4] mt-0.5 font-mono truncate">
@@ -6388,7 +6393,7 @@ export default function App() {
                           ) : (
                             members.map((m) => (
                               <div key={m.id} className="flex justify-between items-center text-gray-300 py-1 font-mono text-[11px]">
-                                <span className="font-sans font-bold flex items-center gap-1">👤 {m.name} {m.id === effectivePlayerId ? "(Вы)" : ""}</span>
+                                <span className="font-sans font-bold flex items-center gap-1">👤 {m.name} {m.isAdmin ? "👑" : m.isModerator ? "🛠️" : ""} {m.id === effectivePlayerId ? "(Вы)" : ""}</span>
                                 <span className="text-[#ffbc6e] font-semibold">{Math.floor(m.coins).toLocaleString()} 💰</span>
                               </div>
                             ))
@@ -7504,7 +7509,7 @@ export default function App() {
                         {(player.name || "Игрок").charAt(0).toUpperCase()}
                       </div>
                       <span className="text-[11px] font-bold truncate max-w-[120px]" style={{ color: player.color }}>
-                        {player.name || "Игрок"} {rank === 1 && "👑"}
+                        {player.name || "Игрок"} {onlinePlayers.find(p => p.id === player.id)?.isAdmin ? "👑" : onlinePlayers.find(p => p.id === player.id)?.isModerator ? "🛠️" : rank === 1 ? "👑" : ""}
                       </span>
                     </div>
                     <span className="text-[10px] font-mono text-cyan-400 font-bold">
@@ -8630,9 +8635,14 @@ export default function App() {
                 <button 
                   onClick={() => {
                     if (adminCode === "admin123") {
-                      setIsAdminLoginModalOpen(false);
-                      setIsAdminConsoleOpen(true);
-                      setAdminCode("");
+                      if (isGlobalPrivileged) {
+                        setIsAdminLoginModalOpen(false);
+                        setIsAdminConsoleOpen(true);
+                        setAdminCode("");
+                      } else {
+                        addToast("У вас нет прав доступа (требуется Модератор или Администратор).");
+                        setAdminCode("");
+                      }
                     } else {
                       addToast("Неверный код доступа!");
                       setAdminCode("");
@@ -10062,9 +10072,14 @@ export default function App() {
               <button 
                 onClick={() => {
                   if (adminCode === "admin123") {
-                    setIsAdminLoginModalOpen(false);
-                    setIsAdminConsoleOpen(true);
-                    setAdminCode("");
+                    if (isGlobalPrivileged) {
+                      setIsAdminLoginModalOpen(false);
+                      setIsAdminConsoleOpen(true);
+                      setAdminCode("");
+                    } else {
+                      addToast("У вас нет прав доступа (требуется Модератор или Администратор).");
+                      setAdminCode("");
+                    }
                   } else {
                     addToast("Неверный код доступа!");
                     setAdminCode("");
