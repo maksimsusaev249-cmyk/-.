@@ -7864,9 +7864,17 @@ export default function App() {
                   </div>
                   
                   <div className="grid grid-cols-2 gap-2 mt-0.5">
+                    {isGlobalAdmin && (
+                      <button 
+                        onClick={() => setIsAdminConsoleOpen(true)}
+                        className="py-2.5 px-3 bg-amber-500 hover:bg-amber-400 transition-colors text-[10px] font-black rounded-lg cursor-pointer text-slate-900 border-none outline-none flex items-center justify-center h-full shadow-lg shadow-amber-500/20"
+                      >
+                        Админ-панель
+                      </button>
+                    )}
                     <button 
                       onClick={currentUser.email?.startsWith("tg_") ? handleTelegramSignOut : (currentUser.email?.startsWith("vk_") ? handleVKSignOut : handleGoogleSignOut)}
-                      className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 transition-colors text-[10px] font-black rounded-lg cursor-pointer text-rose-300 border-none outline-none flex items-center justify-center h-full"
+                      className={`py-2.5 px-3 bg-slate-800 hover:bg-slate-700 transition-colors text-[10px] font-black rounded-lg cursor-pointer text-rose-300 border-none outline-none flex items-center justify-center h-full ${!isGlobalAdmin ? 'col-span-2' : ''}`}
                     >
                       Выйти
                     </button>
@@ -8754,15 +8762,19 @@ export default function App() {
               <button 
                 type="button"
                 onClick={() => {
-                  const newCode = Math.floor(100000 + Math.random() * 900000).toString();
-                  setAdminVerificationCode(newCode);
-                  if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                    socketRef.current.send(JSON.stringify({
-                      type: "register_admin_code",
-                      data: { code: newCode, playerId: effectivePlayerId }
-                    }));
+                  if (isGlobalAdmin) {
+                    setIsAdminConsoleOpen(true);
+                  } else {
+                    const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+                    setAdminVerificationCode(newCode);
+                    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                      socketRef.current.send(JSON.stringify({
+                        type: "register_admin_code",
+                        data: { code: newCode, playerId: effectivePlayerId }
+                      }));
+                    }
+                    setIsAdminLoginModalOpen(true);
                   }
-                  setIsAdminLoginModalOpen(true);
                 }}
                 className="text-[9px] text-gray-700 hover:text-amber-500 transition-colors uppercase tracking-[0.3em] font-black cursor-pointer border-none bg-transparent mt-2"
               >

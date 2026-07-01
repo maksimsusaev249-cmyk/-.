@@ -8,7 +8,7 @@ const firebaseConfig = {
   appId: firebaseConfigRaw?.appId || import.meta.env.VITE_FIREBASE_APP_ID || "",
   apiKey: firebaseConfigRaw?.apiKey || import.meta.env.VITE_FIREBASE_API_KEY || "",
   authDomain: firebaseConfigRaw?.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
-  firestoreDatabaseId: firebaseConfigRaw?.firestoreDatabaseId || import.meta.env.VITE_FIREBASE_DATABASE_ID || "",
+  firestoreDatabaseId: (firebaseConfigRaw as any)?.firestoreDatabaseId || import.meta.env.VITE_FIREBASE_DATABASE_ID || "",
   storageBucket: firebaseConfigRaw?.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
   messagingSenderId: firebaseConfigRaw?.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || ""
 };

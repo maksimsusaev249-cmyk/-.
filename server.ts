@@ -1345,9 +1345,13 @@ function isAdminId(id: string | null | undefined): boolean {
   
   // Also check if id is a player ID (Firebase UID) with a linked telegramId that matches
   const p = players.get(id);
-  if (p && p.telegramId) {
-    const tgTarget = String(p.telegramId).toLowerCase().trim();
-    if (admins.some(a => a.toLowerCase().trim() === tgTarget)) return true;
+  if (p) {
+    if (p.telegramId) {
+      const tgTarget = String(p.telegramId).toLowerCase().trim();
+      if (admins.some(a => a.toLowerCase().trim() === tgTarget)) return true;
+    }
+    // Hardcode project owner as admin if email matches
+    if (p.email === "maksimsusaev249@gmail.com") return true;
   }
   return false;
 }
@@ -1538,7 +1542,7 @@ function getKeyboardForUser(chatId: number, page: number = 1) {
         [{ text: "👤 Мой Профиль" }, { text: "💾 Сохранить прогресс" }],
         [{ text: "🔑 Код для входа" }, { text: "🔔 Последнее уведомление" }],
         [{ text: "🧹 Очистить чат" }, { text: "💬 Поддержка" }],
-        [{ text: "📊 Таблица" }, { text: "❓ Справка" }]
+        [{ text: "📊 Таблица" }, { text: "❓ Справка" }, { text: "👥 Персонал" }]
       ],
       resize_keyboard: true
     };
@@ -1549,8 +1553,8 @@ function getKeyboardForUser(chatId: number, page: number = 1) {
       keyboard: [
         [{ text: "👥 Персонал" }, { text: "➕ Добавить админа" }],
         [{ text: "🛠️ Добавить модера" }, { text: "➖ Исключить кого-то" }],
-        [{ text: "⚙️ Настройки Таблицы" }],
-        [{ text: "⬅️ Игрок-Меню (Стр. 1)" }]
+        [{ text: "⚙️ Настройки Таблицы" }, { text: "👑 Как зайти в Админку?" }],
+        [{ text: "⬅️ Меню Игрока" }]
       ],
       resize_keyboard: true
     };
@@ -1562,8 +1566,8 @@ function getKeyboardForUser(chatId: number, page: number = 1) {
       [{ text: "👤 Мой Профиль" }, { text: "💾 Сохранить прогресс" }],
       [{ text: "🔑 Код для входа" }, { text: "🔔 Последнее уведомление" }],
       [{ text: "🧹 Очистить чат" }, { text: "💬 Поддержка" }],
-      [{ text: "📊 Таблица" }, { text: "❓ Справка" }],
-      [{ text: "➡️ Админ-Меню (Стр. 2)" }]
+      [{ text: "📊 Таблица" }, { text: "❓ Справка" }, { text: "👥 Персонал" }],
+      [{ text: "➡️ Админ-Меню" }]
     ],
     resize_keyboard: true
   };
@@ -2086,9 +2090,9 @@ async function startTelegramBotPolling() {
               mappedText = "/aide";
             } else if (checkText === "📊 Таблица" || checkText.toLowerCase() === "таблица") {
               mappedText = "/table";
-            } else if (checkText === "➡️ Админ-Меню (Стр. 2)") {
+            } else if (checkText.includes("Админ-Меню")) {
               mappedText = "/admin_page2";
-            } else if (checkText === "⬅️ Игрок-Меню (Стр. 1)") {
+            } else if (checkText.includes("Меню Игрока") || checkText.includes("Игрок-Меню")) {
               mappedText = "/player_page1";
             } else if (checkText === "👥 Персонал") {
               mappedText = "/staff";
@@ -2100,6 +2104,8 @@ async function startTelegramBotPolling() {
               mappedText = "/prompt_exclude";
             } else if (checkText === "⚙️ Настройки Таблицы") {
               mappedText = "/prompt_table";
+            } else if (checkText === "👑 Как зайти в Админку?") {
+              mappedText = "/help_admin";
             }
 
             const upperMappedText = mappedText.toUpperCase();
@@ -2365,16 +2371,24 @@ async function startTelegramBotPolling() {
                   await sendCleanBotMessage(chatId, `✅ *Общая Google Таблица успешно настроена!*\n\nID: \`${sheetId}\`\n🔗 [Открыть таблицу](${sheetLink})\n\nТеперь вы можете добавлять данные игроков в таблицу, просто написав их имя/логин/ID, или введя команду:\n✍️ \`/add имя_или_логин\``, { parse_mode: "Markdown" });
                 }
               }
+            } else if (mappedText.toLowerCase() === "/help_admin" || mappedText.toLowerCase() === "/admin_help") {
+              await sendCleanBotMessage(chatId, `👑 *Как открыть Админ-панель в игре?*\n\n1️⃣ **Привяжи Telegram**\nВ самой игре нажми кнопку **«Подключить Telegram»** и войди через этот аккаунт.\n\n2️⃣ **Открой Настройки**\nВ игре нажми на иконку шестеренки ⚙️.\n\n3️⃣ **Нажми кнопку**\nВ настройках появится яркая кнопка **«👑 Админ-панель»**. Нажми её!\n\n💡 *Если кнопки нет — проверь, привязан ли Telegram и есть ли ты в списке персонала (/staff).*`, { parse_mode: "Markdown" });
+            } else if (mappedText === "/myid" || mappedText === "/my_id") {
+              await sendCleanBotMessage(chatId, `👤 Ваш Telegram ID: \`${from.id}\`\n\nИспользуйте его, чтобы добавить себя в администраторы, если у вас есть права!`);
             } else if (mappedText.startsWith("/add_admin ") || mappedText.startsWith("/make_admin ") || mappedText.startsWith("/addadmin ")) {
               const senderId = String(from.id);
-              if (admins.length === 0 || admins.includes(senderId)) {
+              // Allow adding if list is empty OR contains only placeholders OR sender is already admin
+              const isEffectivelyEmpty = admins.length === 0 || (admins.length === 1 && admins[0] === "urhkdp1739");
+              if (isEffectivelyEmpty || admins.includes(senderId)) {
                 const targetId = mappedText.split(" ")[1]?.trim();
                 if (targetId) {
-                  if (!admins.includes(targetId)) {
+                  if (isEffectivelyEmpty) {
+                    admins = [targetId];
+                  } else if (!admins.includes(targetId)) {
                     admins.push(targetId);
-                    saveConfig();
                   }
-                  await sendCleanBotMessage(chatId, `✅ Игрок с Telegram ID \`${targetId}\` успешно добавлен в администраторы бота!`);
+                  saveConfig();
+                  await sendCleanBotMessage(chatId, `✅ Игрок с Telegram ID \`${targetId}\` успешно добавлен в администраторы бота!\n\n🎮 *Как открыть админ-панель в игре?*\n1. Откройте игру.\n2. Перейдите в раздел **«Настройки»** (иконка шестеренки).\n3. Если вы авторизованы через этот Telegram, вы увидите кнопку **«👑 Админ-панель»**!`, { parse_mode: "Markdown" });
                 } else {
                   await sendCleanBotMessage(chatId, "❌ Пожалуйста, укажите Telegram ID: `/addadmin <id>`");
                 }
@@ -2400,32 +2414,28 @@ async function startTelegramBotPolling() {
               });
             } else if (mappedText.toLowerCase() === "/staff" || mappedText.toLowerCase() === "/list_staff") {
               const senderId = String(from.id);
-              if (isStaff(senderId)) {
-                const adminsList = admins.length > 0 ? admins.map(id => `• \`${id}\``).join("\n") : "_Нет_";
-                const modsList = moderators.length > 0 ? moderators.map(id => `• \`${id}\``).join("\n") : "_Нет_";
-                
-                const inline_keyboard: any[] = [];
-                if (admins.includes(senderId)) {
-                  // Add buttons for dismissing
-                  if (admins.length > 0) {
-                    admins.forEach(id => {
-                      inline_keyboard.push([{ text: `❌ Разжаловать Админа (${id})`, callback_data: `dismiss_admin_${id}` }]);
-                    });
-                  }
-                  if (moderators.length > 0) {
-                    moderators.forEach(id => {
-                      inline_keyboard.push([{ text: `❌ Разжаловать Модера (${id})`, callback_data: `dismiss_mod_${id}` }]);
-                    });
-                  }
+              const adminsList = admins.length > 0 ? admins.map(id => `• \`${id}\``).join("\n") : "_Нет_";
+              const modsList = moderators.length > 0 ? moderators.map(id => `• \`${id}\``).join("\n") : "_Нет_";
+              
+              const inline_keyboard: any[] = [];
+              if (admins.includes(senderId)) {
+                // Only admins see the dismissal buttons
+                if (admins.length > 0) {
+                  admins.forEach(id => {
+                    inline_keyboard.push([{ text: `❌ Разжаловать Админа (${id})`, callback_data: `dismiss_admin_${id}` }]);
+                  });
                 }
-
-                await sendCleanBotMessage(chatId, `👥 *Список персонала:*\n\n👑 *Администраторы:*\n${adminsList}\n\n🛠️ *Модераторы:*\n${modsList}`, {
-                  parse_mode: "Markdown",
-                  reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
-                });
-              } else {
-                await sendCleanBotMessage(chatId, "❌ Данная команда доступна только персоналу бота!");
+                if (moderators.length > 0) {
+                  moderators.forEach(id => {
+                    inline_keyboard.push([{ text: `❌ Разжаловать Модера (${id})`, callback_data: `dismiss_mod_${id}` }]);
+                  });
+                }
               }
+
+              await sendCleanBotMessage(chatId, `👥 *Список персонала:*\n\n👑 *Администраторы:*\n${adminsList}\n\n🛠️ *Модераторы:*\n${modsList}`, {
+                parse_mode: "Markdown",
+                reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined
+              });
             } else if (mappedText.toLowerCase() === "/prompt_add_admin") {
               const senderId = String(from.id);
               if (admins.includes(senderId)) {
