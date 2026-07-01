@@ -97,7 +97,11 @@ async function getGoogleSheetValues(spreadsheetId: string, range: string): Promi
     });
     return res.data.values || null;
   } catch (err: any) {
-    console.error(`Error reading Google Sheet values (${spreadsheetId}):`, err.message || err);
+    if (err.message && err.message.includes("API has not been used")) {
+      console.warn(`Google Sheet API needs enabling. Please enable it in the Google Cloud Console for project 728480963619. Your sheet link: https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`);
+    } else {
+      console.error(`Error reading Google Sheet values (${spreadsheetId}):`, err.message || err);
+    }
     return null;
   }
 }
