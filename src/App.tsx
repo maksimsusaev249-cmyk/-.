@@ -52,6 +52,7 @@ import {
   Mic,
   MicOff,
   Copy,
+  Diamond,
 } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from "recharts";
 const swordImg = "/images/item_sword.jpg";
@@ -189,12 +190,29 @@ interface ClickSparkle {
 }
 
 interface Quest {
-  id: number;
-  type: "clicks" | "coins";
+  id: string;
+  type: string;
   target: number;
   reward: number;
   desc: string;
+  progress?: number;
 }
+
+const getRandomQuest = (): Quest => {
+  const r = Math.random();
+  const id = Date.now() + "_" + Math.random().toString(36).substring(2, 9);
+  if (r < 0.5) {
+    const targets = [100, 500, 1000, 5000];
+    const target = targets[Math.floor(Math.random() * targets.length)];
+    return { id, type: "clicks", target, progress: 0, reward: target * 2, desc: `Сделать ${target} кликов` };
+  } else if (r < 0.8) {
+    const targets = [500, 1000, 5000, 10000];
+    const target = targets[Math.floor(Math.random() * targets.length)];
+    return { id, type: "coins", target, progress: 0, reward: Math.floor(target * 0.5), desc: `Собрать ${target} монет` };
+  } else {
+    return { id, type: "sell_item", target: 1, progress: 0, reward: 2000, desc: "Продать 1 предмет на рынке" };
+  }
+};
 
 const playNotificationReceivedChime = () => {
   try {
@@ -441,6 +459,32 @@ export default function App() {
     return 10.0;
   });
 
+  const [crystals, setCrystals] = useState<number>(() => {
+    try {
+      const saved = safeGetItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.crystals === "number" ? parsed.crystals : 10;
+      }
+    } catch (e) {
+      console.error("Failed to parse crystals from gameDataV9", e);
+    }
+    return 10;
+  });
+
+  const [questReplacements, setQuestReplacements] = useState<number>(() => {
+    try {
+      const saved = safeGetItem("gameDataV9");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return typeof parsed.questReplacements === "number" ? parsed.questReplacements : 3;
+      }
+    } catch (e) {
+      console.error("Failed to parse questReplacements from gameDataV9", e);
+    }
+    return 3;
+  });
+
   const [coinExchangeRate, setCoinExchangeRate] = useState<number>(2.45);
   const [exchangeHistory, setExchangeHistory] = useState<{ time: string; rate: number }[]>(() => {
     const list = [];
@@ -586,17 +630,22 @@ export default function App() {
   const [playerColor, setPlayerColor] = useState<string>("#e67e22");
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const [currentQuest, setCurrentQuest] = useState<Quest>(() => {
+  const [currentQuests, setCurrentQuests] = useState<Quest[]>(() => {
     try {
       const saved = safeGetItem("gameDataV9");
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.currentQuest) return parsed.currentQuest;
+        if (parsed.currentQuests) return parsed.currentQuests;
+        if (parsed.currentQuest) return [parsed.currentQuest, getRandomQuest(), getRandomQuest()];
       }
     } catch (e) {
-      console.error("Failed to parse currentQuest from gameDataV9", e);
+      console.error("Failed to parse currentQuests from gameDataV9", e);
     }
-    return { id: 1, type: "clicks", target: 100, reward: 100, desc: "Сделать 100 кликов" };
+    return [
+      { id: "newbie_sell", type: "sell_item", target: 1, progress: 0, reward: 500, desc: "Продать 1 предмет из инвентаря" },
+      { id: "newbie_invite", type: "invite_friend", target: 1, progress: 0, reward: 1000, desc: "Пригласить друга" },
+      { id: "newbie_clan", type: "create_clan", target: 1, progress: 0, reward: 2000, desc: "Создать первый клан" }
+    ];
   });
 
   // --- SOCIAL NETWORKING STATES ---
@@ -782,7 +831,7 @@ export default function App() {
   const [pendingClanPassword, setPendingClanPassword] = useState("");
 
   // --- MARKETPLACE / SHOP STATES ---
-  const [activeShopTab, setActiveShopTab] = useState<"buy" | "sell" | "exchange">("buy");
+  const [activeShopTab, setActiveShopTab] = useState<"buy" | "sell" | "exchange" | "crystals">("buy");
   const [exchangeCoinsAmount, setExchangeCoinsAmount] = useState("");
   const [exchangeRublesAmount, setExchangeRublesAmount] = useState("");
   const [isExchanging, setIsExchanging] = useState(false);
@@ -1033,6 +1082,41 @@ export default function App() {
   const [clanSearchQuery, setClanSearchQuery] = useState("");
   const [customSearchResults, setCustomSearchResults] = useState<any[] | null>(null);
   const [isSearchingFirestore, setIsSearchingFirestore] = useState(false);
+
+  useEffect(() => {
+    if (!playerSearchQuery.trim()) {
+      setCustomSearchResults(null);
+      return;
+    }
+    const delayDebounce = setTimeout(async () => {
+      setIsSearchingFirestore(true);
+      try {
+        const q = query(collection(db, "users"), limit(500));
+        const snap = await getDocs(q);
+        const allDbPlayers = snap.docs.map(d => {
+          const data = d.data();
+          return {
+            id: d.id,
+            name: data.playerName || data.name || data.displayName || "Без имени",
+            coins: data.coins || 0,
+            clan: data.playerClan || data.clan || null,
+            photoURL: data.photoURL || null,
+            isOnline: onlinePlayers.some(op => op.id === d.id)
+          };
+        });
+        const queryLower = playerSearchQuery.toLowerCase();
+        const filtered = allDbPlayers.filter(p => 
+          (p.name.toLowerCase().includes(queryLower) || (p.clan || "").toLowerCase().includes(queryLower))
+        );
+        setCustomSearchResults(filtered);
+      } catch (err) {
+        console.error("Auto search players error:", err);
+      } finally {
+        setIsSearchingFirestore(false);
+      }
+    }, 400);
+    return () => clearTimeout(delayDebounce);
+  }, [playerSearchQuery, onlinePlayers]);
   
   // Clan state fields
   const [newClanName, setNewClanName] = useState("");
@@ -1207,8 +1291,10 @@ export default function App() {
       playerPhotoURL,
       playerClan,
       playerId,
-      currentQuest,
+      currentQuests,
       rubles,
+      crystals,
+      questReplacements,
       lastActiveTimestamp: Date.now() + timeOffsetRef.current
     }));
     safeSetItem("gameFriendsV9", JSON.stringify(friendsList));
@@ -1230,13 +1316,13 @@ export default function App() {
         }
       }));
     }
-  }, [coins, clickPowerLevel, autoClickerLevel, energyLevel, energy, maxEnergy, regenRate, totalClicks, playerName, playerPhotoURL, playerClan, currentQuest, friendsList, currentUser, linkedTelegramId]);
+  }, [coins, clickPowerLevel, autoClickerLevel, energyLevel, energy, maxEnergy, regenRate, totalClicks, playerName, playerPhotoURL, playerClan, currentQuests, friendsList, currentUser, linkedTelegramId, rubles, crystals, questReplacements]);
 
   const saveToFirestoreRef = useRef<any>(null);
-  const playerStateRef = useRef({ playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled, isWhitelistApproved });
+  const playerStateRef = useRef({ playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuests, notificationsEnabled, isWhitelistApproved });
   useEffect(() => {
     saveToFirestoreRef.current = saveToFirestore;
-    playerStateRef.current = { playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuest, notificationsEnabled, isWhitelistApproved };
+    playerStateRef.current = { playerName, playerClan, coins, totalClicks, playerColor, autoClickerLevel, clickPowerLevel, energyLevel, levelItems, currentQuests, notificationsEnabled, isWhitelistApproved };
   });
 
   // Automatically save on tab close or app hide
@@ -1443,6 +1529,13 @@ export default function App() {
                   setNewClanPassword("");
                   setIsClanPrivate(false);
                   logUserAction("Создал клан: " + clan);
+                  
+                  setCurrentQuests(prev => prev.map(q => {
+                    if (q.type === "create_clan" && (q.progress ?? 0) < q.target) {
+                      return { ...q, progress: (q.progress || 0) + 1 };
+                    }
+                    return q;
+                  }));
                 } else {
                   addToast(`⚠️ Ошибка: ${error || "Не удалось создать клан"}`);
                 }
@@ -1932,38 +2025,42 @@ export default function App() {
   };
 
   // --- QUEST LOGIC ---
-  const generateNewQuest = () => {
-    const difficulty = 1 + (clickPowerLevel * 0.2) + (totalClicks / 1000);
-    const types: ("clicks" | "coins")[] = ["clicks", "coins"];
-    const type = types[Math.floor(Math.random() * types.length)];
-    let target = 100;
-    let reward = 100;
-    let desc = "";
-
-    if (type === "clicks") {
-      target = Math.floor(100 * difficulty * 1.5);
-      reward = Math.floor(target * 1.5);
-      desc = `Сделать ${target} кликов`;
+  const replaceQuest = (questId: string) => {
+    if (questReplacements > 0) {
+      setCurrentQuests(prev => prev.map(q => q.id === questId ? getRandomQuest() : q));
+      setQuestReplacements(prev => prev - 1);
+      addToast("🔄 Задание заменено!");
     } else {
-      target = Math.floor(500 * difficulty * 2);
-      reward = Math.floor(target * 0.5);
-      desc = `Накопить ${target} монет`;
+      addToast("❌ Нет доступных замен! Купите за изумруды.");
     }
-
-    const newQuest: Quest = { id: Date.now(), type, target, reward, desc };
-    setCurrentQuest(newQuest);
-    addToast("📜 Сгенерировано новое задание!");
   };
 
-  const claimQuestReward = () => {
+  const buyQuestReplacements = () => {
+    if (crystals >= 10) {
+      setCrystals(prev => prev - 10);
+      setQuestReplacements(3);
+      addToast("💎 Куплено 3 замены заданий!");
+    } else {
+      addToast("❌ Недостаточно изумрудов!");
+    }
+  };
+
+  const claimQuestReward = (questId: string) => {
+    const quest = currentQuests.find(q => q.id === questId);
+    if (!quest) return;
+
     let completed = false;
-    if (currentQuest.type === "clicks" && totalClicks >= currentQuest.target) completed = true;
-    if (currentQuest.type === "coins" && coins >= currentQuest.target) completed = true;
+    if (quest.type === "clicks" && totalClicks >= quest.target) completed = true;
+    if (quest.type === "coins" && coins >= quest.target) completed = true;
+    if (quest.type === "invite_friend" && userReferrals.length >= quest.target) completed = true;
+    // sell_item, create_clan have progress field that is incremented
+    if ((quest.type === "sell_item" || quest.type === "create_clan") && quest.progress && quest.progress >= quest.target) completed = true;
 
     if (completed) {
-      setCoins((prev) => prev + currentQuest.reward);
-      addToast(`✅ Награда получена: +${currentQuest.reward} монет!`);
-      setTimeout(generateNewQuest, 800);
+      setCoins((prev) => prev + quest.reward);
+      addToast(`✅ Награда получена: +${quest.reward} монет!`);
+      // Replace with new random quest
+      setCurrentQuests(prev => prev.map(q => q.id === questId ? getRandomQuest() : q));
     } else {
       addToast("❌ Задание еще не выполнено!");
     }
@@ -2193,7 +2290,7 @@ export default function App() {
     setLinkedTelegramId(null);
     setIsWhitelistApproved(false);
     setPlayerPhotoURL("https://api.dicebear.com/7.x/pixel-art/svg?seed=Lucky");
-    setCurrentQuest({ id: 1, type: "clicks", target: 100, reward: 100, desc: "Сделать 100 кликов" });
+    setCurrentQuests([getRandomQuest(), getRandomQuest(), getRandomQuest()]);
     
     // Clear local storage that might contain previous user's data
     safeRemoveItem("gameDataV9");
@@ -2303,6 +2400,8 @@ export default function App() {
             }
             setCoins(loadedCoins);
             if (typeof data.rubles === "number") setRubles(data.rubles);
+            if (typeof data.crystals === "number") setCrystals(data.crystals);
+            if (typeof data.questReplacements === "number") setQuestReplacements(data.questReplacements);
             if (typeof data.clickPowerLevel === "number") setClickPowerLevel(data.clickPowerLevel);
             if (typeof data.autoClickerLevel === "number") setAutoClickerLevel(data.autoClickerLevel);
             if (typeof data.energyLevel === "number") setEnergyLevel(data.energyLevel);
@@ -2310,18 +2409,16 @@ export default function App() {
             if (typeof data.maxEnergy === "number") setMaxEnergy(data.maxEnergy);
             if (typeof data.regenRate === "number") setRegenRate(data.regenRate);
             if (typeof data.totalClicks === "number") setTotalClicks(data.totalClicks);
-            let resolvedPlayerName = data.playerName || "Игрок";
-            const isGoogleUser = user.providerData?.some((p) => p.providerId === "google.com") || (user.email && !user.email.startsWith("tg_"));
-            
-            if (isGoogleUser && user.displayName && user.displayName !== data.playerName) {
+            let resolvedPlayerName = "Игрок";
+            if (data.playerName) {
+              resolvedPlayerName = data.playerName;
+            } else if (user.displayName) {
               resolvedPlayerName = user.displayName;
               try {
                 await setDoc(docRef, { playerName: user.displayName }, { merge: true });
               } catch (e) {
-                console.warn("Could not update google name in Firestore", e);
+                console.warn("Could not save initial display name in Firestore", e);
               }
-            } else if (typeof data.playerName === "string") {
-              resolvedPlayerName = data.playerName;
             }
 
             setPlayerName(resolvedPlayerName);
@@ -2338,7 +2435,7 @@ export default function App() {
               setLastDailyBonusClaimedAt(data.lastDailyBonusClaimedAt);
             }
             if (typeof data.playerClan === "string" || data.playerClan === null) setPlayerClan(data.playerClan);
-            if (data.currentQuest) setCurrentQuest(data.currentQuest);
+            if (data.currentQuests) setCurrentQuests(data.currentQuests);
             if (typeof data.notificationsEnabled === "boolean") {
               setNotificationsEnabled(data.notificationsEnabled);
             } else {
@@ -2515,7 +2612,7 @@ export default function App() {
               photoURL: user.photoURL || playerPhotoURL || "",
               playerClan,
               levelItems,
-              currentQuest,
+              currentQuests,
               notificationsEnabled: true,
               whitelistApproved: isApproved,
               ...(tgId ? { telegramId: tgId } : {}),
@@ -2688,8 +2785,10 @@ export default function App() {
         playerName,
         playerClan,
         levelItems,
-        currentQuest,
+        currentQuests,
         rubles,
+        crystals,
+        questReplacements,
         notificationsEnabled,
         lastDailyBonusClaimedAt,
         friendsCount: friendsList.length,
@@ -3142,7 +3241,7 @@ export default function App() {
       saveToFirestore(currentUser);
     }, 60000);
     return () => clearInterval(interval);
-  }, [currentUser, coins, clickPowerLevel, autoClickerLevel, energyLevel, energy, maxEnergy, regenRate, totalClicks, playerName, playerClan, currentQuest]);
+  }, [currentUser, coins, clickPowerLevel, autoClickerLevel, energyLevel, energy, maxEnergy, regenRate, totalClicks, playerName, playerClan, currentQuests]);
 
   // Save or update an authenticated account in local storage
   const saveAccountToLocalList = (
@@ -3233,7 +3332,11 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Account switch failed:", err);
-      addToast(`❌ Ошибка входа: ${err.message || err}`);
+      if (err && (err.code === "auth/popup-closed-by-user" || err.message?.includes("popup-closed-by-user"))) {
+        addToast("ℹ️ Вход отменен (окно было закрыто).");
+      } else {
+        addToast(`❌ Ошибка входа: ${err.message || err}`);
+      }
     } finally {
       setIsAccountSwitching(false);
     }
@@ -3947,6 +4050,13 @@ export default function App() {
         }
       }
 
+      setCurrentQuests(prev => prev.map(q => {
+        if (q.type === "sell_item" && (q.progress ?? 0) < q.target) {
+          return { ...q, progress: (q.progress || 0) + 1 };
+        }
+        return q;
+      }));
+
       addToast("🏪 Предмет успешно выставлен на продажу!");
       setNewListingTitle("");
       setNewListingDesc("");
@@ -4024,7 +4134,7 @@ export default function App() {
             playerName: playerName || "Игрок",
             playerClan: playerClan || null,
             levelItems: updatedItems,
-            currentQuest: currentQuest || null,
+            currentQuests: currentQuests || null,
             notificationsEnabled: notificationsEnabled !== false,
             updatedAt: serverTimestamp()
           });
@@ -4131,7 +4241,7 @@ export default function App() {
             playerName: playerName || "Игрок",
             playerClan: playerClan || null,
             levelItems: updatedBuyerItems,
-            currentQuest: currentQuest || null,
+            currentQuests: currentQuests || null,
             notificationsEnabled: notificationsEnabled !== false,
             updatedAt: serverTimestamp()
           });
@@ -4183,12 +4293,36 @@ export default function App() {
   };
 
   // --- GAME SYSTEM SETTINGS NAME ---
-  const applySettingsName = () => {
+  const applySettingsName = async () => {
     const trimmed = editingName.trim();
     if (trimmed) {
       setPlayerName(trimmed);
       addToast("👤 Ваше имя обновлено!");
       setIsSettingsOpen(false);
+      
+      if (currentUser) {
+        try {
+          const docRef = doc(db, "users", currentUser.uid);
+          await setDoc(docRef, { playerName: trimmed, updatedAt: serverTimestamp() }, { merge: true });
+          
+          await updateProfile(currentUser, { displayName: trimmed });
+          
+          try {
+            await addDoc(collection(db, "user_actions"), {
+              userId: currentUser.uid,
+              playerName: trimmed,
+              coins: coins,
+              action: "Смена никнейма",
+              details: `Игрок изменил никнейм на ${trimmed}`,
+              timestamp: serverTimestamp()
+            });
+          } catch (e) {
+            console.warn("Could not log nickname change action", e);
+          }
+        } catch (err) {
+          console.error("Failed to update custom name in Firebase:", err);
+        }
+      }
     }
   };
 
@@ -4583,40 +4717,68 @@ export default function App() {
 
   const renderQuestsContent = () => {
     return (
-      <div className="flex flex-col gap-3 h-full justify-between pb-1 text-white">
-        <div className="bg-[#162239] rounded-2xl p-4 border border-[#e67e22]/30 flex flex-col gap-3.5 relative">
-          <div>
-            <span className="text-[11px] font-extrabold text-[#ffd966] block uppercase tracking-wider font-mono">📜 Текущее задание</span>
-            <span className="text-base font-bold text-white mt-1 block">{currentQuest.desc}</span>
+      <div className="flex flex-col gap-3 h-full justify-between pb-1 text-white overflow-y-auto pr-1">
+        <div className="flex flex-col gap-3">
+          <div className="bg-slate-900/50 p-3 rounded-xl flex items-center justify-between border border-white/10 mb-2">
+            <div>
+              <span className="text-xs text-gray-400 block font-medium">Замены заданий</span>
+              <span className="text-sm font-bold font-mono text-amber-400">{questReplacements} / 3</span>
+            </div>
+            {questReplacements === 0 && (
+              <button
+                onClick={buyQuestReplacements}
+                className="bg-amber-600 hover:bg-amber-500 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition-colors flex items-center gap-1 shadow-md border-none cursor-pointer"
+              >
+                Купить за 10 💎
+              </button>
+            )}
           </div>
-          
-          <div className="flex items-center justify-between border-t border-white/5 pt-3 text-xs">
-            <span className="text-gray-400 font-semibold">Прогресс действия:</span>
-            <span className="font-mono text-[#ffd966] font-bold">
-              {currentQuest.type === "clicks" ? totalClicks : coins} / {currentQuest.target}
-            </span>
-          </div>
-        </div>
+          {currentQuests.map(quest => {
+            let currentVal = 0;
+            if (quest.type === "clicks") currentVal = totalClicks;
+            else if (quest.type === "coins") currentVal = coins;
+            else if (quest.type === "invite_friend") currentVal = userReferrals.length;
+            else if (quest.progress !== undefined) currentVal = quest.progress;
 
-        <div className="flex gap-2.5 mt-4">
-          <button 
-            type="button"
-            onClick={claimQuestReward}
-            className={`flex-1 py-3.5 rounded-xl font-bold text-sm shadow-md transition-all border-none ${
-              ((currentQuest.type === "clicks" ? totalClicks : coins) >= currentQuest.target)
-                ? "bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer animate-pulse"
-                : "bg-gray-800 text-gray-500 cursor-not-allowed"
-            }`}
-          >
-            ЗАБРАТЬ {currentQuest.reward} 💰
-          </button>
-          <button 
-            type="button"
-            onClick={generateNewQuest}
-            className="px-4 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-semibold text-gray-300 transition-colors border-none cursor-pointer"
-          >
-            Сменить 🔄
-          </button>
+            const completed = currentVal >= quest.target;
+
+            return (
+              <div key={quest.id} className="bg-[#162239] rounded-2xl p-4 border border-[#e67e22]/30 flex flex-col gap-3 relative">
+                <div>
+                  <span className="text-[11px] font-extrabold text-[#ffd966] block uppercase tracking-wider font-mono">📜 ЗАДАНИЕ</span>
+                  <span className="text-sm font-bold text-white mt-1 block">{quest.desc}</span>
+                </div>
+                
+                <div className="flex items-center justify-between border-t border-white/5 pt-3 text-xs">
+                  <span className="text-gray-400 font-semibold">Прогресс:</span>
+                  <span className="font-mono text-[#ffd966] font-bold">
+                    {currentVal} / {quest.target}
+                  </span>
+                </div>
+
+                <div className="flex gap-2.5 mt-2">
+                  <button 
+                    type="button"
+                    onClick={() => claimQuestReward(quest.id)}
+                    className={`flex-1 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all border-none ${
+                      completed
+                        ? "bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer animate-pulse"
+                        : "bg-gray-800 text-gray-500 cursor-not-allowed"
+                    }`}
+                  >
+                    ЗАБРАТЬ {quest.reward} 💰
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => replaceQuest(quest.id)}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-[10px] font-semibold text-gray-300 transition-colors border-none cursor-pointer"
+                  >
+                    Изменить 🔄
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -5203,7 +5365,19 @@ export default function App() {
               activeShopTab === "exchange" ? "bg-[#e67e22] text-white font-extrabold shadow-md" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
-            <TrendingUp className="w-3.5 h-3.5" /> БИРЖА COIN
+            <TrendingUp className="w-3.5 h-3.5" /> БИРЖА
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveShopTab("crystals");
+              setSelectedListing(null);
+            }}
+            className={`flex-1 py-2.5 rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer border-none outline-none ${
+              activeShopTab === "crystals" ? "bg-[#e67e22] text-white font-extrabold shadow-md" : "text-gray-400 hover:text-white bg-transparent"
+            }`}
+          >
+            <Diamond className="w-3.5 h-3.5" /> КРИСТАЛЛЫ
           </button>
         </div>
 
@@ -5566,7 +5740,7 @@ export default function App() {
               </div>
             )}
           </div>
-        ) : (
+        ) : activeShopTab === "exchange" ? (
           /* --- EXCHANGE CONTAINER --- */
           <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 min-h-0">
              {/* Beautiful Exchange rate live status widget */}
@@ -5917,7 +6091,69 @@ export default function App() {
                 )}
              </div>
           </div>
-        )}
+        ) : activeShopTab === "crystals" ? (
+          /* --- CRYSTALS CONTAINER --- */
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 min-h-0">
+            <div className="bg-[#0f172a] border border-white/5 rounded-2xl p-4 flex flex-col gap-3 shadow-lg items-center justify-center text-center">
+              <Diamond className="w-12 h-12 text-cyan-400 mb-2" />
+              <span className="text-sm text-white font-black uppercase tracking-wider">Магазин изумрудов</span>
+              <span className="text-[11px] text-gray-400">Обменивайте коины на ценные изумруды, чтобы использовать уникальные функции.</span>
+              
+              <div className="w-full mt-4 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (coins >= 10000) {
+                      setCoins(prev => prev - 10000);
+                      setCrystals(prev => prev + 1);
+                      addToast("💎 Успешно куплен 1 изумруд!");
+                    } else {
+                      addToast("❌ Недостаточно коинов!");
+                    }
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-xs font-black rounded-xl text-white transition-all uppercase outline-none border-none shadow cursor-pointer flex items-center justify-between px-4"
+                >
+                  <span className="flex items-center gap-1.5"><Diamond className="w-3.5 h-3.5" /> 1 Изумруд</span>
+                  <span className="font-mono bg-black/30 px-2 py-1 rounded text-[10px]">10,000 💰</span>
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (coins >= 45000) {
+                      setCoins(prev => prev - 45000);
+                      setCrystals(prev => prev + 5);
+                      addToast("💎 Успешно куплено 5 изумрудов!");
+                    } else {
+                      addToast("❌ Недостаточно коинов!");
+                    }
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-xs font-black rounded-xl text-white transition-all uppercase outline-none border-none shadow cursor-pointer flex items-center justify-between px-4"
+                >
+                  <span className="flex items-center gap-1.5"><Diamond className="w-3.5 h-3.5" /> 5 Изумрудов</span>
+                  <span className="font-mono bg-black/30 px-2 py-1 rounded text-[10px]">45,000 💰</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (coins >= 80000) {
+                      setCoins(prev => prev - 80000);
+                      setCrystals(prev => prev + 10);
+                      addToast("💎 Успешно куплено 10 изумрудов!");
+                    } else {
+                      addToast("❌ Недостаточно коинов!");
+                    }
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-xs font-black rounded-xl text-white transition-all uppercase outline-none border-none shadow cursor-pointer flex items-center justify-between px-4"
+                >
+                  <span className="flex items-center gap-1.5"><Diamond className="w-3.5 h-3.5" /> 10 Изумрудов</span>
+                  <span className="font-mono bg-black/30 px-2 py-1 rounded text-[10px]">80,000 💰</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -5958,7 +6194,7 @@ export default function App() {
     setIsSearchingFirestore(true);
     addToast("🔍 Поиск игроков по всей базе...");
     try {
-      const q = query(collection(db, "users"), limit(150));
+      const q = query(collection(db, "users"), limit(500));
       const snap = await getDocs(q);
       const allDbPlayers = snap.docs.map(d => {
         const data = d.data();
@@ -5973,7 +6209,6 @@ export default function App() {
       });
       const queryLower = playerSearchQuery.toLowerCase();
       const filtered = allDbPlayers.filter(p => 
-        p.id !== effectivePlayerId && 
         (p.name.toLowerCase().includes(queryLower) || (p.clan || "").toLowerCase().includes(queryLower))
       );
       setCustomSearchResults(filtered);
@@ -5986,7 +6221,6 @@ export default function App() {
       console.error("Firestore global user search error:", err);
       // Fallback matching online players only
       const foundOnline = onlinePlayers.filter(p => 
-        p.id !== effectivePlayerId && 
         p.name.toLowerCase().includes(playerSearchQuery.toLowerCase())
       );
       setCustomSearchResults(foundOnline);
@@ -6008,7 +6242,7 @@ export default function App() {
               setPlayerSearchQuery("");
             }}
             className={`h-9 rounded-lg transition-all text-center flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer border-none outline-none ${
-              activeSocialTab === "players" ? "bg-[#e67e22] text-white font-extrabold animate-pulse" : "text-gray-400 hover:text-white bg-transparent"
+              activeSocialTab === "players" ? "bg-[#e67e22] text-white font-extrabold" : "text-gray-400 hover:text-white bg-transparent"
             }`}
           >
             <Users className="w-3 h-3" /> ИГРОКИ
@@ -6100,12 +6334,16 @@ export default function App() {
                     🔍 Поиск игроков в базе данных...
                   </div>
                 ) : (customSearchResults !== null ? (
-                  customSearchResults.length === 0 ? (
-                    <div className="text-gray-500 text-center py-10 text-xs text-amber-400 font-bold border border-white/5 bg-slate-950/20 rounded-2xl p-6">
-                      🔍 Игроки по запросу "{playerSearchQuery}" не найдены в базе.
-                    </div>
-                  ) : (
-                    customSearchResults.map((p) => {
+                  (() => {
+                    const filteredCustom = customSearchResults;
+                    if (filteredCustom.length === 0) {
+                      return (
+                        <div className="text-gray-500 text-center py-10 text-xs text-amber-400 font-bold border border-white/5 bg-slate-950/20 rounded-2xl p-6">
+                          🔍 Игроки по запросу "{playerSearchQuery}" не найдены в базе.
+                        </div>
+                      );
+                    }
+                    return filteredCustom.map((p) => {
                       const isFriend = friendsList.includes(p.id);
                       return (
                         <div key={p.id} className="bg-[#162239] border border-white/5 rounded-2xl p-3 flex flex-col gap-3.5 shadow-sm">
@@ -6156,7 +6394,7 @@ export default function App() {
                         </div>
                       );
                     })
-                  )
+                  })()
                 ) : (
                   onlinePlayers.length === 0 ? (
                     <div className="text-gray-500 text-center py-10 text-xs animate-pulse">
