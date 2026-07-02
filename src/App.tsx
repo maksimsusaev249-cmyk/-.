@@ -2172,6 +2172,37 @@ export default function App() {
     }
   }, [currentUser, clansPrivacy]);
 
+  // --- RESET GAME STATE ---
+  const resetGameState = () => {
+    console.log("Resetting game state to defaults...");
+    setCoins(0);
+    setRubles(10.0);
+    setClickPowerLevel(1);
+    setAutoClickerLevel(0);
+    setEnergyLevel(1);
+    setEnergy(100);
+    setMaxEnergy(100);
+    setRegenRate(1);
+    setTotalClicks(0);
+    setPlayerName("Игрок");
+    setEditingName("Игрок");
+    setPlayerClan(null);
+    setLevelItems([]);
+    setLastClaimedLevel(1);
+    setLastDailyBonusClaimedAt(0);
+    setLinkedTelegramId(null);
+    setIsWhitelistApproved(false);
+    setPlayerPhotoURL("https://api.dicebear.com/7.x/pixel-art/svg?seed=Lucky");
+    setCurrentQuest({ id: 1, type: "clicks", target: 100, reward: 100, desc: "Сделать 100 кликов" });
+    
+    // Clear local storage that might contain previous user's data
+    safeRemoveItem("gameDataV9");
+    safeRemoveItem("gameLevelItemsV12");
+    safeRemoveItem("gameLastClaimedLevelV12");
+    safeRemoveItem("gameLastDailyBonusClaimedAtV1");
+    setOfflineEarningsData(null);
+  };
+
   // --- GOOGLE AUTHENTICATION SYSTEM EFFECTS ---
   useEffect(() => {
     if (!auth) {
@@ -2182,6 +2213,15 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        // If we just logged in or switched (detected via skipVKAutoLogin flag), 
+        // we MUST reset the local game state before loading the new user's data.
+        const isJustSwitched = sessionStorage.getItem("skipVKAutoLogin") === "true";
+        if (isJustSwitched) {
+          console.log("Auth switch detected in state listener. Cleaning up old session data...");
+          resetGameState();
+          // We keep the flag for the duration of this effect to handle the 'else' (new user) case too
+        }
+
         setCurrentUser(user);
         setIsAuthLoading(false);
         
@@ -2191,6 +2231,13 @@ export default function App() {
         }
 
         try {
+          // If we just logged in or switched, we might want to clear old local state 
+          // IF it's not a fresh session. However, the most important part is 
+          // that docSnap data OVERWRITES everything. 
+          // If the doc doesn't exist, we should check if we want to inherit local state or start fresh.
+          // Since the user is complaining about "personal account data appearing on other account",
+          // it means the "inheritance" logic in the 'else' block below is too aggressive.
+
           const docRef = doc(db, "users", user.uid);
           let docSnap;
           try {
@@ -2324,19 +2371,33 @@ export default function App() {
               loadedCoins
             );
           } else {
-            // First time login: we secure their existing client progress by syncing it to their new cloud account
+            // First time cloud login for this UID.
+            // IMPORTANT: If we are switching accounts, we should NOT inherit the previous user's coins/state.
+            // We only inherit if this was a truly anonymous session that is now being upgraded.
+            // If sessionStorage.getItem("skipVKAutoLogin") is present, it's a strong hint we just logged out/switched.
+            
+            const isJustSwitched = sessionStorage.getItem("skipVKAutoLogin") === "true";
+            
+            if (isJustSwitched) {
+              console.log("Account switch detected, starting fresh for new account.");
+              // Reset local variables that will be used for first-time cloud sync
+              resetGameState();
+            }
+
             const tgId = user.email && user.email.startsWith("tg_") ? String(user.email.split("@")[0].replace("tg_", "")) : null;
             if (tgId) {
               setLinkedTelegramId(tgId);
             } else {
               setLinkedTelegramId(null);
             }
-            let finalCoins = coins;
-            let finalClickPower = clickPowerLevel;
-            let finalAutoClicker = autoClickerLevel;
-            let finalEnergyLevel = energyLevel;
-            let finalTotalClicks = totalClicks;
-            let finalPlayerName = user.displayName || playerName;
+            
+            // Use fresh defaults or current state (if was anonymous and not just switched)
+            let finalCoins = isJustSwitched ? 0 : coins;
+            let finalClickPower = isJustSwitched ? 1 : clickPowerLevel;
+            let finalAutoClicker = isJustSwitched ? 0 : autoClickerLevel;
+            let finalEnergyLevel = isJustSwitched ? 1 : energyLevel;
+            let finalTotalClicks = isJustSwitched ? 0 : totalClicks;
+            let finalPlayerName = user.displayName || (isJustSwitched ? "Игрок" : playerName);
 
             // Check VK Cloud storage backup if first login under a VK ID
             if (user.email?.startsWith("vk_")) {
@@ -2478,11 +2539,16 @@ export default function App() {
           }
         } catch (error) {
           handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+        } finally {
+          // Clear the switch flag if it was present
+          sessionStorage.removeItem("skipVKAutoLogin");
         }
       } else {
         setCurrentUser(null);
         setLinkedTelegramId(null);
         setIsAuthLoading(false);
+        // CRITICAL: Reset game state when user logs out so the next user doesn't see old data
+        resetGameState();
       }
     });
 
@@ -3233,7 +3299,14 @@ export default function App() {
           // 2. Additional sync for VK users
           if (isVk) {
             addToast("☁️ Синхронизация с VK Cloud...");
-            await syncWithVKCloud();
+            try {
+              await Promise.race([
+                syncWithVKCloud(),
+                new Promise((resolve) => setTimeout(resolve, 3000))
+              ]);
+            } catch (err) {
+              console.error("VK Sync timeout/error during sign out", err);
+            }
           }
           
           // 3. Mark for skipping auto-login on next refresh
